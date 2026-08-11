@@ -173,7 +173,8 @@ public sealed unsafe class BubbleDecorator : IDisposable
 
         LastStatus =
             $"addons={addonsSeen} components={componentsSeen} visible={visibleBubbles} " +
-            $"withText={textsSeen} hook={(hook.IsActive ? "on" : "OFF")} applied={states.Count}";
+            $"withText={textsSeen} hook={(hook.IsActive ? "on" : "OFF")} " +
+            $"pending={hook.PendingCount} applied={states.Count}";
 
         // Throttled, because PostDraw runs every frame. Without this the decorator side is invisible
         // unless the config window happens to be open.
@@ -229,27 +230,26 @@ public sealed unsafe class BubbleDecorator : IDisposable
             if (!visible || !config.Enabled)
                 continue;
 
-            string? chosen = null;
-
-            if (!visibleLastFrame.Contains(pointer))
-            {
-                // This bubble just opened, so it belongs to the oldest un-claimed creation the hook saw.
-                // Bubbles open in the order the game announces them, which makes this a safe pairing and
-                // ties each sticker to one specific message rather than to any bubble sharing its words.
-                newlyVisibleThisFrame++;
-                var creation = hook.Dequeue();
-                chosen = creation?.ImagePath;
-
-                if (config.VerboseLogging)
-                {
-                    Services.Log.Information(
-                        $"  bubble opened (text=\"{phrase}\") -> " +
-                        $"{(creation is null ? "queue empty" : creation.ImagePath ?? "no sticker for that message")}");
-                }
-            }
+            // Claim by the bubble's own text rather than by arrival order. Only messages that resolved
+            // to a sticker are waiting, so ordinary chat cannot consume the entry meant for this one.
+            var chosen = hook.Claim(phrase);
 
             if (chosen is null)
+            {
+                if (config.VerboseLogging && !visibleLastFrame.Contains(pointer) && !string.IsNullOrEmpty(phrase))
+                {
+                    newlyVisibleThisFrame++;
+                    // Print both sides: if a sticker is pending but the texts differ, the two
+                    // normalisations disagree and that is the bug, not the pairing.
+                    Services.Log.Information(
+                        $"  bubble opened (text=\"{phrase}\") -> no match; " +
+                        $"pending=[{string.Join(" | ", hook.PendingTexts)}]");
+                }
+
                 continue;
+            }
+
+            newlyVisibleThisFrame++;
 
             var parts = GetParts(chosen);
             if (parts is null)

@@ -11,13 +11,19 @@ namespace FfxivStickerChat;
 /// <summary>An auto-translate phrase seen going past, offered in the config UI for one-click binding.</summary>
 public sealed record SeenPhrase(uint Group, uint Key, string Text, string Sender, DateTime SeenAt);
 
-/// <summary>One chat bubble the game is about to open, and the sticker it should carry.</summary>
-public sealed record BubbleCreation(
+/// <summary>A bubble the game is about to open that has a sticker waiting for it.</summary>
+/// <param name="MatchText">
+/// The message as the bubble will render it, normalised. Used to tie this specific message to the
+/// bubble that shows it.
+/// </param>
+public sealed record PendingSticker(
     string Sender,
     ushort WorldId,
     ushort LogKindId,
     bool IsLocalPlayer,
-    string? ImagePath);
+    string MatchText,
+    string ImagePath,
+    DateTime Expires);
 
 /// <summary>
 /// Intercepts bubble creation to learn who is speaking and what they actually said.
@@ -41,8 +47,18 @@ public sealed unsafe class BubbleHook : IDisposable
     private readonly PackStore packs;
     private readonly Hook<RaptureLogModule.Delegates.ShowMiniTalkPlayer>? hook;
 
-    /// <summary>Bubbles opened since the last frame, oldest first.</summary>
-    private readonly Queue<BubbleCreation> queued = new();
+    /// <summary>
+    /// Messages with a sticker, waiting for their bubble to appear.
+    /// </summary>
+    /// <remarks>
+    /// Only messages that actually resolve to a sticker are tracked. An earlier version queued every
+    /// bubble the game opened, so ordinary chatter filled the queue and the entry for a real sticker was
+    /// evicted or claimed by an unrelated bubble before it could be used.
+    /// </remarks>
+    private readonly List<PendingSticker> pending = [];
+
+    /// <summary>How long a message waits for its bubble before being discarded.</summary>
+    private static readonly TimeSpan PendingLifetime = TimeSpan.FromSeconds(10);
 
     /// <summary>Auto-translate phrases seen this session, newest first.</summary>
     private readonly List<SeenPhrase> seen = [];
@@ -83,10 +99,62 @@ public sealed unsafe class BubbleHook : IDisposable
     /// </remarks>
     public IReadOnlyList<SeenPhrase> Seen => seen;
 
-    /// <summary>Takes the oldest pending bubble, or null when none are waiting.</summary>
-    public BubbleCreation? Dequeue() => queued.Count > 0 ? queued.Dequeue() : null;
+    /// <summary>
+    /// Claims the sticker for a bubble showing <paramref name="bubbleText"/>, or null if none matches.
+    /// </summary>
+    /// <remarks>
+    /// Matching on the rendered text ties a bubble to the message that produced it, rather than assuming
+    /// bubbles open in the same order the game announces them. Whether a sticker exists at all is still
+    /// decided by auto-translate id, so text is only used to pick which bubble — never to decide that
+    /// something is a sticker.
+    /// </remarks>
+    public string? Claim(string bubbleText)
+    {
+        Expire();
 
-    public void Clear() => queued.Clear();
+        if (string.IsNullOrEmpty(bubbleText))
+            return null;
+
+        for (var i = 0; i < pending.Count; i++)
+        {
+            if (!string.Equals(pending[i].MatchText, bubbleText, StringComparison.Ordinal))
+                continue;
+
+            var claimed = pending[i];
+            pending.RemoveAt(i);
+            return claimed.ImagePath;
+        }
+
+        return null;
+    }
+
+    /// <summary>The texts currently waiting, for diagnosing a failed match.</summary>
+    public IReadOnlyList<string> PendingTexts
+    {
+        get
+        {
+            Expire();
+            return pending.ConvertAll(p => p.MatchText);
+        }
+    }
+
+    /// <summary>Number of messages still waiting for a bubble.</summary>
+    public int PendingCount
+    {
+        get
+        {
+            Expire();
+            return pending.Count;
+        }
+    }
+
+    public void Clear() => pending.Clear();
+
+    private void Expire()
+    {
+        var now = DateTime.UtcNow;
+        pending.RemoveAll(p => p.Expires < now);
+    }
 
     private void Detour(
         RaptureLogModule* thisPtr,
@@ -124,6 +192,7 @@ public sealed unsafe class BubbleHook : IDisposable
         var channelAllowed = config.IsChannelEnabled(logKindId);
 
         string? imagePath = null;
+        var matchText = string.Empty;
 
         var span = message->AsSpan();
 
@@ -152,6 +221,9 @@ public sealed unsafe class BubbleHook : IDisposable
                 if (channelAllowed)
                     imagePath = packs.Resolve(first.Group, first.Key, senderName, worldId);
 
+                // How the bubble will render this message, so the right bubble can be identified later.
+                matchText = AutoTranslateDetector.Normalize(parsed.TextValue);
+
                 RecordSeen(first.Group, first.Key, first.Text, senderName);
 
                 if (config.VerboseLogging)
@@ -169,12 +241,25 @@ public sealed unsafe class BubbleHook : IDisposable
             }
         }
 
-        queued.Enqueue(new BubbleCreation(senderName, worldId, logKindId, isLocalPlayer, imagePath));
+        // Only messages with a sticker are worth tracking. Everything else is ordinary chat and must not
+        // occupy a slot the real thing needs.
+        if (imagePath is null)
+            return;
 
-        // A bubble the game opens but we never claim would leave a stale entry ahead of the next real
-        // one, so the queue is bounded and drained every frame.
-        while (queued.Count > 16)
-            queued.Dequeue();
+        Expire();
+
+        pending.Add(new PendingSticker(
+            senderName,
+            worldId,
+            logKindId,
+            isLocalPlayer,
+            matchText,
+            imagePath,
+            DateTime.UtcNow + PendingLifetime));
+
+        // Bounded even so: a message whose bubble never appears would otherwise linger until it expires.
+        while (pending.Count > 16)
+            pending.RemoveAt(0);
     }
 
     /// <summary>Readable preview of a message's raw bytes, so payload structure is visible.</summary>
@@ -223,6 +308,6 @@ public sealed unsafe class BubbleHook : IDisposable
         disposed = true;
         hook?.Disable();
         hook?.Dispose();
-        queued.Clear();
+        pending.Clear();
     }
 }
