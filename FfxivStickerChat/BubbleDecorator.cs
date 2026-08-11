@@ -230,9 +230,10 @@ public sealed unsafe class BubbleDecorator : IDisposable
             if (!visible || !config.Enabled)
                 continue;
 
-            // Claim by the bubble's own text rather than by arrival order. Only messages that resolved
-            // to a sticker are waiting, so ordinary chat cannot consume the entry meant for this one.
-            var chosen = hook.Claim(phrase);
+            // Match by the bubble's own text rather than by arrival order. Only messages that resolved
+            // to a sticker are waiting, so ordinary chat cannot take the entry meant for this one.
+            // Deliberately does not consume: the first attempt often fails while the texture decodes.
+            var chosen = hook.Peek(phrase);
 
             if (chosen is null)
             {
@@ -250,12 +251,18 @@ public sealed unsafe class BubbleDecorator : IDisposable
             }
 
             newlyVisibleThisFrame++;
-            Services.Log.Information($"claimed \"{phrase}\" -> {System.IO.Path.GetFileName(chosen)}");
+
+            if (config.VerboseLogging)
+                Services.Log.Information($"matched \"{phrase}\" -> {System.IO.Path.GetFileName(chosen)}");
 
             var parts = GetParts(chosen);
             if (parts is null)
             {
-                Services.Log.Information("  no parts list yet (texture still decoding); will retry");
+                // Normal on first use while the image decodes. The pending entry is intentionally still
+                // there, so the next frame tries again.
+                if (config.VerboseLogging)
+                    Services.Log.Information("  texture still decoding; retrying next frame");
+
                 continue;
             }
 
@@ -268,6 +275,9 @@ public sealed unsafe class BubbleDecorator : IDisposable
 
             applied.ImagePath = chosen;
             states[pointer] = applied;
+
+            // Only now is the sticker really on screen, so retire the pending entry.
+            hook.Consume(phrase);
         }
     }
 
@@ -466,7 +476,6 @@ public sealed unsafe class BubbleDecorator : IDisposable
             return null;
 
         ref var res = ref node->AtkResNode;
-        Services.Log.Information($"  Apply() entered on node id={res.NodeId}");
 
         var state = new SlotState
         {

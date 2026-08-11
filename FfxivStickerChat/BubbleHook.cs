@@ -108,24 +108,41 @@ public sealed unsafe class BubbleHook : IDisposable
     /// decided by auto-translate id, so text is only used to pick which bubble — never to decide that
     /// something is a sticker.
     /// </remarks>
-    public string? Claim(string bubbleText)
+    public string? Peek(string bubbleText)
     {
         Expire();
 
         if (string.IsNullOrEmpty(bubbleText))
             return null;
 
+        foreach (var candidate in pending)
+        {
+            if (string.Equals(candidate.MatchText, bubbleText, StringComparison.Ordinal))
+                return candidate.ImagePath;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Drops a pending sticker once its bubble has actually been decorated.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="Peek"/> on purpose. Consuming at match time loses the sticker whenever
+    /// the first attempt fails — most importantly while the texture is still decoding, which is exactly
+    /// the case the first time any given image is used. Keeping the entry until the apply succeeds lets
+    /// the next frame retry.
+    /// </remarks>
+    public void Consume(string bubbleText)
+    {
         for (var i = 0; i < pending.Count; i++)
         {
             if (!string.Equals(pending[i].MatchText, bubbleText, StringComparison.Ordinal))
                 continue;
 
-            var claimed = pending[i];
             pending.RemoveAt(i);
-            return claimed.ImagePath;
+            return;
         }
-
-        return null;
     }
 
     /// <summary>The texts currently waiting, for diagnosing a failed match.</summary>
