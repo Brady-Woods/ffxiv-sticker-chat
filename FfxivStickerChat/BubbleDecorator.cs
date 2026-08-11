@@ -250,22 +250,24 @@ public sealed unsafe class BubbleDecorator : IDisposable
             }
 
             newlyVisibleThisFrame++;
+            Services.Log.Information($"claimed \"{phrase}\" -> {System.IO.Path.GetFileName(chosen)}");
 
             var parts = GetParts(chosen);
             if (parts is null)
             {
-                if (config.VerboseLogging)
-                    Services.Log.Information($"Sticker not resident yet for {chosen}");
-
+                Services.Log.Information("  no parts list yet (texture still decoding); will retry");
                 continue;
             }
 
             var applied = Apply(nodes, phrase, parts);
-            if (applied is not null)
+            if (applied is null)
             {
-                applied.ImagePath = chosen;
-                states[pointer] = applied;
+                Services.Log.Warning("  Apply() returned null - sticker node missing on this bubble");
+                continue;
             }
+
+            applied.ImagePath = chosen;
+            states[pointer] = applied;
         }
     }
 
@@ -348,48 +350,6 @@ public sealed unsafe class BubbleDecorator : IDisposable
                 res.MultiplyRed_2 = config.NeutralMultiplyValue;
                 res.MultiplyGreen_2 = config.NeutralMultiplyValue;
                 res.MultiplyBlue_2 = config.NeutralMultiplyValue;
-            }
-
-            if (config.NeutralizeAncestorTint)
-            {
-                // Colour composes down the tree, so a tint set on a parent reaches the sticker no matter
-                // what the sticker itself says. Clearing those parents fixes the sticker but also drains
-                // the colour from the bubble frame, which inherits from the very same nodes.
-                //
-                // So the tint is moved rather than deleted: capture it on the way up, clear the parents,
-                // then re-apply it to the frame layers directly. The bubble keeps its channel colour and
-                // the sticker renders clean.
-                var captured = default(CapturedTint);
-
-                for (var ancestor = res.ParentNode;
-                     ancestor is not null && !MiniTalk.IsComponent(ancestor);
-                     ancestor = ancestor->ParentNode)
-                {
-                    if (!captured.HasTint && IsTinted(ancestor))
-                        captured = CapturedTint.From(ancestor);
-
-                    if (state is not null && !state.TintedAncestors.Exists(a => a.Node == (nint)ancestor))
-                    {
-                        state.TintedAncestors.Add(((nint)ancestor, ancestor->Color.RGBA,
-                            ancestor->AddRed, ancestor->AddGreen, ancestor->AddBlue,
-                            ancestor->MultiplyRed, ancestor->MultiplyGreen, ancestor->MultiplyBlue));
-                    }
-
-                    Neutralize(ancestor);
-                }
-
-                if (captured.HasTint)
-                {
-                    foreach (var candidate in nodes.NineGrids)
-                        ApplyTint((AtkResNode*)candidate, captured, state);
-
-                    // The tail is part of the frame too, so it should match rather than turn white.
-                    foreach (var candidate in nodes.Images)
-                    {
-                        if (candidate != (nint)node)
-                            ApplyTint((AtkResNode*)candidate, captured, state);
-                    }
-                }
             }
 
             if (state is not null && !state.LoggedTint)
@@ -506,6 +466,7 @@ public sealed unsafe class BubbleDecorator : IDisposable
             return null;
 
         ref var res = ref node->AtkResNode;
+        Services.Log.Information($"  Apply() entered on node id={res.NodeId}");
 
         var state = new SlotState
         {
@@ -543,7 +504,7 @@ public sealed unsafe class BubbleDecorator : IDisposable
         node->PartId = 0;
         res.ToggleVisibility(true);
 
-        var (width, height) = ApplyGeometry(nodes, parts);
+        var (width, height) = ApplyGeometry(nodes, parts, state);
 
         if (nodes.Text is not null)
         {
