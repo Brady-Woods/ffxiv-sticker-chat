@@ -52,6 +52,8 @@ public sealed unsafe class BubbleDecorator : IDisposable
     private int componentsSeen;
     private int visibleBubbles;
     private int textsSeen;
+    private int newlyVisibleThisFrame;
+    private DateTime lastStatusLog = DateTime.MinValue;
     private bool disposed;
 
     public BubbleDecorator(Configuration config, StickerRegistry registry, BubbleHook hook)
@@ -160,6 +162,7 @@ public sealed unsafe class BubbleDecorator : IDisposable
         componentsSeen = 0;
         visibleBubbles = 0;
         textsSeen = 0;
+        newlyVisibleThisFrame = 0;
         visibleThisFrame.Clear();
 
         ProcessAddon(addon);
@@ -171,6 +174,14 @@ public sealed unsafe class BubbleDecorator : IDisposable
         LastStatus =
             $"addons={addonsSeen} components={componentsSeen} visible={visibleBubbles} " +
             $"withText={textsSeen} hook={(hook.IsActive ? "on" : "OFF")} applied={states.Count}";
+
+        // Throttled, because PostDraw runs every frame. Without this the decorator side is invisible
+        // unless the config window happens to be open.
+        if (config.VerboseLogging && DateTime.UtcNow - lastStatusLog > TimeSpan.FromSeconds(2))
+        {
+            lastStatusLog = DateTime.UtcNow;
+            Services.Log.Information($"[{addonName}] {LastStatus} newlyVisible={newlyVisibleThisFrame}");
+        }
     }
 
     private void ProcessAddon(AtkUnitBase* addon)
@@ -225,7 +236,16 @@ public sealed unsafe class BubbleDecorator : IDisposable
                 // This bubble just opened, so it belongs to the oldest un-claimed creation the hook saw.
                 // Bubbles open in the order the game announces them, which makes this a safe pairing and
                 // ties each sticker to one specific message rather than to any bubble sharing its words.
-                chosen = hook.Dequeue()?.ImagePath;
+                newlyVisibleThisFrame++;
+                var creation = hook.Dequeue();
+                chosen = creation?.ImagePath;
+
+                if (config.VerboseLogging)
+                {
+                    Services.Log.Information(
+                        $"  bubble opened (text=\"{phrase}\") -> " +
+                        $"{(creation is null ? "queue empty" : creation.ImagePath ?? "no sticker for that message")}");
+                }
             }
 
             if (chosen is null)
