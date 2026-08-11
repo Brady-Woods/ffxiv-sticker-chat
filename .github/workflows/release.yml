@@ -1,0 +1,85 @@
+name: Release
+
+# Tag a commit to cut a release:
+#   git tag v0.0.0.2 && git push origin v0.0.0.2
+#
+# Publishes latest.zip as a release asset and points repo.json at it. The download links in repo.json use
+# /releases/latest/download/, so they never need to change — only AssemblyVersion and LastUpdate do.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Install .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Download Dalamud
+        run: |
+          Invoke-WebRequest -Uri https://goatcorp.github.io/dalamud-distrib/latest.zip -OutFile dalamud.zip
+          Expand-Archive -Force dalamud.zip "$env:AppData\XIVLauncher\addon\Hooks\dev"
+
+      - name: Build
+        run: dotnet build --configuration Release --nologo
+
+      - name: Read version from built manifest
+        id: manifest
+        shell: pwsh
+        run: |
+          $manifest = Get-Content .\FfxivStickerChat\bin\x64\Release\FfxivStickerChat\FfxivStickerChat.json -Raw | ConvertFrom-Json
+          "version=$($manifest.AssemblyVersion)" >> $env:GITHUB_OUTPUT
+          Write-Host "Built version $($manifest.AssemblyVersion)"
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: .\FfxivStickerChat\bin\x64\Release\FfxivStickerChat\latest.zip
+          tag_name: ${{ github.ref_name }}
+          name: v${{ steps.manifest.outputs.version }}
+          generate_release_notes: true
+
+      - name: Update repo.json
+        shell: pwsh
+        run: |
+          $version = "${{ steps.manifest.outputs.version }}"
+          $path = "repo.json"
+          $repo = Get-Content $path -Raw | ConvertFrom-Json
+
+          # ConvertFrom-Json unwraps a single-element array, so normalise before writing back out.
+          $entries = @($repo)
+          foreach ($entry in $entries) {
+            $entry.AssemblyVersion = $version
+            $entry.TestingAssemblyVersion = $version
+            $entry.LastUpdate = [int][double]::Parse((Get-Date -UFormat %s))
+          }
+
+          ConvertTo-Json -InputObject $entries -Depth 10 | Set-Content $path -Encoding UTF8
+
+      - name: Commit repo.json
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add repo.json
+          if (git diff --staged --quiet) {
+            Write-Host "repo.json unchanged."
+          } else {
+            git commit -m "chore: repo.json -> v${{ steps.manifest.outputs.version }}"
+            git push origin HEAD:main
+          }

@@ -1,0 +1,13 @@
+{
+  "Author": "brady.woods",
+  "Name": "Sticker Chat",
+  "Punchline": "Turns auto-translate phrases into stickers over players' heads.",
+  "Description": "When someone sends a chat message made up only of auto-translate phrases, replaces their native chat bubble with a sticker image. Mapping is 1:1 and user configurable. Receive-only: this plugin never sends chat.",
+  "ApplicableVersion": "any",
+  "Tags": [
+    "chat",
+    "bubbles",
+    "roleplay",
+    "stickers"
+  ]
+}
