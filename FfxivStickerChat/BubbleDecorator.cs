@@ -362,6 +362,48 @@ public sealed unsafe class BubbleDecorator : IDisposable
                 res.MultiplyBlue_2 = config.NeutralMultiplyValue;
             }
 
+            if (config.NeutralizeAncestorTint)
+            {
+                // Colour composes down the tree, so a tint on a parent reaches the sticker regardless of
+                // what the sticker itself says. Clearing those parents cleans the sticker but also drains
+                // the bubble frame, which inherits from the very same nodes.
+                //
+                // So the tint is moved rather than deleted: captured on the way up, cleared from the
+                // parents, then re-applied to the frame layers directly. Bubble keeps its channel colour,
+                // sticker renders clean.
+                var captured = default(CapturedTint);
+
+                for (var ancestor = res.ParentNode;
+                     ancestor is not null && !MiniTalk.IsComponent(ancestor);
+                     ancestor = ancestor->ParentNode)
+                {
+                    if (!captured.HasTint && IsTinted(ancestor))
+                        captured = CapturedTint.From(ancestor);
+
+                    if (state is not null && !state.TintedAncestors.Exists(a => a.Node == (nint)ancestor))
+                    {
+                        state.TintedAncestors.Add(((nint)ancestor, ancestor->Color.RGBA,
+                            ancestor->AddRed, ancestor->AddGreen, ancestor->AddBlue,
+                            ancestor->MultiplyRed, ancestor->MultiplyGreen, ancestor->MultiplyBlue));
+                    }
+
+                    Neutralize(ancestor);
+                }
+
+                if (captured.HasTint)
+                {
+                    foreach (var candidate in nodes.NineGrids)
+                        ApplyTint((AtkResNode*)candidate, captured, state);
+
+                    // The tail is frame too, so it should match rather than turn white.
+                    foreach (var candidate in nodes.Images)
+                    {
+                        if (candidate != (nint)node)
+                            ApplyTint((AtkResNode*)candidate, captured, state);
+                    }
+                }
+            }
+
             if (state is not null && !state.LoggedTint)
             {
                 state.LoggedTint = true;
@@ -634,7 +676,10 @@ public sealed unsafe class BubbleDecorator : IDisposable
                 node->MultiplyRed, node->MultiplyGreen, node->MultiplyBlue));
         }
 
+        var alpha = node->Color.A;
         node->Color.RGBA = tint.Color;
+        node->Color.A = alpha;
+
         node->AddRed = tint.AddR;
         node->AddGreen = tint.AddG;
         node->AddBlue = tint.AddB;
