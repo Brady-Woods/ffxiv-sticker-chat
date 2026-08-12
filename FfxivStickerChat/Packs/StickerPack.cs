@@ -73,6 +73,15 @@ public sealed class StickerPack
     /// <summary>Display name of the owner's world, for the UI only.</summary>
     public string OwnerWorldName { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Where this pack can be downloaded from, if anywhere.
+    /// </summary>
+    /// <remarks>
+    /// Set by the author so recipients can fetch updates without being sent a file each time, and
+    /// recorded on import so a pack can be refreshed later. Must be https.
+    /// </remarks>
+    public string SourceUrl { get; set; } = string.Empty;
+
     /// <summary>False hides the pack from resolution without deleting it.</summary>
     public bool Enabled { get; set; } = true;
 

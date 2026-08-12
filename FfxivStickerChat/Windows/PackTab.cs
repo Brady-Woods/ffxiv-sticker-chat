@@ -1,5 +1,7 @@
 using System;
 using System.IO;
+using System.Threading.Tasks;
+using Dalamud.Interface.Utility.Raii;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.ImGuiFileDialog;
@@ -25,6 +27,8 @@ public sealed class PackTab
     private string? selectedPackId;
     private string? pendingDeleteId;
     private string newPackName = string.Empty;
+    private string importUrl = string.Empty;
+    private bool downloading;
     private string pendingDeleteWarning = string.Empty;
 
     public PackTab(Plugin plugin, StickerRegistry registry, FileDialogManager fileDialogs)
@@ -107,6 +111,24 @@ public sealed class PackTab
                 },
                 1,
                 string.Empty);
+        }
+
+        ImGui.SameLine();
+        ImGui.SetNextItemWidth(240);
+        ImGui.InputTextWithHint("##url", "https://.../pack.zip", ref importUrl, 512);
+
+        ImGui.SameLine();
+        using (ImRaii.Disabled(downloading || string.IsNullOrWhiteSpace(importUrl)))
+        {
+            if (ImGui.Button(downloading ? "Downloading..." : "Import from URL"))
+                BeginUrlImport();
+        }
+
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip(
+                "Must be a direct https link to the zip.\n" +
+                "Cloud drive share links usually serve a preview page rather than the file.");
         }
 
         ImGui.SameLine();
@@ -201,6 +223,34 @@ public sealed class PackTab
         ImGui.EndTable();
     }
 
+    /// <summary>
+    /// Downloads a pack off the UI thread and reports the outcome back through the status line.
+    /// </summary>
+    private void BeginUrlImport()
+    {
+        var url = importUrl.Trim();
+        downloading = true;
+        status = "Downloading...";
+
+        _ = Task.Run(async () =>
+        {
+            var result = await PackDownloader.DownloadAndImportAsync(url, store).ConfigureAwait(false);
+
+            // Touching store state and UI fields belongs on the framework thread.
+            await Services.Framework.Run(() =>
+            {
+                downloading = false;
+                status = result.Message;
+
+                if (result.Success && result.Pack is not null)
+                {
+                    selectedPackId = result.Pack.Id;
+                    importUrl = string.Empty;
+                }
+            }).ConfigureAwait(false);
+        });
+    }
+
     private void DrawPackDetails(StickerPack pack)
     {
         if (pack.IsLocal)
@@ -246,6 +296,38 @@ public sealed class PackTab
             ImGui.SetTooltip(
                 "Stamped from the character the pack was created on and carried through export, so an\n" +
                 "imported pack pairs to its author automatically. Not editable.");
+        }
+
+        if (pack.IsLocal)
+        {
+            ImGui.SetNextItemWidth(430);
+            var source = pack.SourceUrl;
+            if (ImGui.InputTextWithHint("Download URL", "optional https link where you host this pack", ref source, 512))
+            {
+                pack.SourceUrl = source.Trim();
+                store.Save(pack);
+            }
+
+            if (ImGui.IsItemHovered())
+            {
+                ImGui.SetTooltip(
+                    "Travels with the pack when exported, so whoever imports it can pull your updates\n" +
+                    "without you sending the file again.");
+            }
+        }
+        else if (!string.IsNullOrEmpty(pack.SourceUrl))
+        {
+            ImGui.TextDisabled($"source: {pack.SourceUrl}");
+
+            ImGui.SameLine();
+            using (ImRaii.Disabled(downloading))
+            {
+                if (ImGui.Button(downloading ? "Updating..." : "Update from source"))
+                {
+                    importUrl = pack.SourceUrl;
+                    BeginUrlImport();
+                }
+            }
         }
 
         if (pack.IsLocal && ImGui.Button("Export to zip..."))

@@ -65,8 +65,18 @@ and a format that validates then silently fails to render is worse than one refu
 
 ### Sharing
 
-Export writes a zip; import reads one. An archive is treated as untrusted input — paths are confined to
-`media/`, sizes are capped, and every file's bytes are hashed and checked against the name it claims.
+Export writes a zip; import reads one, either from disk or from an https URL. A pack can carry a
+**download URL**, which travels with it on export — so recipients pull your updates themselves instead of
+you sending the file again.
+
+An archive is untrusted input, and so is the URL. Fetching is https only, redirects are followed manually
+and re-checked at each hop, hosts resolving to private or loopback addresses are refused, the download is
+capped while streaming, and the payload must actually be a zip. Passing that only gets the bytes as far
+as the importer, which independently re-validates every entry — paths confined to `media/`, sizes capped,
+and each file hashed against the name it claims.
+
+Note that cloud drive *share* links usually serve a preview page rather than the file. A direct link is
+needed — a GitHub release asset works well.
 
 ## Installing
 

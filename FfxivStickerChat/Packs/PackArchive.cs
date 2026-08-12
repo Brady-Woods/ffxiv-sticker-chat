@@ -201,7 +201,13 @@ public static class PackArchive
 
             var existing = store.Get(pack.Id);
             if (existing is not null)
+            {
                 pack.Priority = existing.Priority;
+
+                // Keep a URL the recipient already had if the archive does not carry one.
+                if (string.IsNullOrEmpty(pack.SourceUrl))
+                    pack.SourceUrl = existing.SourceUrl;
+            }
 
             store.Save(pack);
 
@@ -255,6 +261,7 @@ public static class PackArchive
         Description = pack.Description,
         Enabled = pack.Enabled,
         Priority = pack.Priority,
+        SourceUrl = pack.SourceUrl,
         IsLocal = pack.IsLocal,
         OwnerName = pack.OwnerName,
         OwnerWorldId = pack.OwnerWorldId,
