@@ -46,7 +46,17 @@ public static class PackDownloader
         string? expectedHash = null,
         CancellationToken cancellationToken = default)
     {
-        if (!TryValidateUrl(url, out var uri, out var reason))
+        // A share link points at a web page, not a file. Rewrite it to the direct form before anything
+        // else, so the URL people naturally copy actually works.
+        var resolved = ShareLinks.Resolve(url);
+
+        if (!resolved.Supported)
+            return new PackTransferResult(false, resolved.Note);
+
+        if (!string.IsNullOrEmpty(resolved.Note))
+            Services.Log.Information(resolved.Note);
+
+        if (!TryValidateUrl(resolved.Url, out var uri, out var reason))
             return new PackTransferResult(false, reason);
 
         string? tempPath = null;
@@ -57,11 +67,14 @@ public static class PackDownloader
 
             if (bytes.Length < 4 || bytes[0] != 'P' || bytes[1] != 'K' || bytes[2] != 0x03 || bytes[3] != 0x04)
             {
-                // Share links from cloud drives usually serve an HTML page rather than the file. Saying
-                // so is more useful than "not a readable zip archive" from the importer.
-                return new PackTransferResult(false,
-                    "That URL did not return a zip. Cloud drives often serve a preview page — use a " +
-                    "direct download link.");
+                // Even after rewriting, a link can land on a sign-in wall or a "file too large to scan"
+                // page. Saying which is far more useful than the importer's "not a readable zip".
+                var looksLikeHtml = bytes.Length > 1 && bytes[0] == '<';
+
+                return new PackTransferResult(false, looksLikeHtml
+                    ? "That URL returned a web page, not a zip — the file is probably not public, or " +
+                      "needs sign-in."
+                    : "That URL did not return a zip.");
             }
 
             if (!string.IsNullOrEmpty(expectedHash))

@@ -75,8 +75,23 @@ capped while streaming, and the payload must actually be a zip. Passing that onl
 as the importer, which independently re-validates every entry — paths confined to `media/`, sizes capped,
 and each file hashed against the name it claims.
 
-Note that cloud drive *share* links usually serve a preview page rather than the file. A direct link is
-needed — a GitHub release asset works well.
+Share links point at a web page rather than the file, so they are rewritten to the host's direct
+download form automatically — paste the link you'd normally send someone:
+
+| host | works |
+|---|---|
+| GitHub release asset | yes, already direct |
+| Google Drive | yes, rewritten |
+| Dropbox | yes, rewritten |
+| OneDrive / SharePoint | yes, rewritten |
+| **Proton Drive** | **no** |
+
+Proton Drive share links are end-to-end encrypted: the decryption key lives in the URL fragment, which
+browsers never send to the server, and only their web app can decrypt the file. That is a property of the
+encryption, not something more code can work around — export the zip and host it elsewhere.
+
+Very large packs on Google Drive can hit its virus-scan interstitial, which serves a page instead of the
+file. The plugin says so rather than failing obscurely.
 
 ## Installing
 
