@@ -52,11 +52,14 @@ public sealed unsafe class StickerParts : IDisposable
     /// <summary>
     /// Allocates a one-part list pointing at <paramref name="texture"/>, or null if the UI heap refuses.
     /// </summary>
-    public static StickerParts? Create(Texture* texture, ushort width, ushort height)
+    public static StickerParts? Create(Texture* texture, StickerTexture sticker)
     {
         var uiSpace = IMemorySpace.GetUISpace();
         if (uiSpace is null || texture is null)
             return null;
+
+        var width = sticker.Width;
+        var height = sticker.Height;
 
         var partsList = uiSpace->Malloc<AtkUldPartsList>();
         var part = uiSpace->Malloc<AtkUldPart>();
@@ -85,9 +88,16 @@ public sealed unsafe class StickerParts : IDisposable
             texture->ActualHeight = height;
         }
 
-        // AllocatedWidth can exceed ActualWidth when the surface is padded; sample the actual region.
-        var sampleWidth = (ushort)Math.Clamp(texture->ActualWidth, 1u, ushort.MaxValue);
-        var sampleHeight = (ushort)Math.Clamp(texture->ActualHeight, 1u, ushort.MaxValue);
+        // Sample only the opaque region. Transparent padding inside the canvas would otherwise decide
+        // the sticker's size and centring, putting the visible artwork off to one side.
+        var sampleX = sticker.ContentWidth > 0 ? sticker.ContentX : (ushort)0;
+        var sampleY = sticker.ContentHeight > 0 ? sticker.ContentY : (ushort)0;
+        var sampleWidth = sticker.ContentWidth > 0
+            ? sticker.ContentWidth
+            : (ushort)Math.Clamp(texture->ActualWidth, 1u, ushort.MaxValue);
+        var sampleHeight = sticker.ContentHeight > 0
+            ? sticker.ContentHeight
+            : (ushort)Math.Clamp(texture->ActualHeight, 1u, ushort.MaxValue);
 
         LogSafe(
             $"Sticker texture: actual {texture->ActualWidth}x{texture->ActualHeight}, " +
@@ -98,8 +108,8 @@ public sealed unsafe class StickerParts : IDisposable
         asset->AtkTexture.TextureType = TextureType.KernelTexture;
 
         part->UldAsset = asset;
-        part->U = 0;
-        part->V = 0;
+        part->U = sampleX;
+        part->V = sampleY;
         part->Width = sampleWidth;
         part->Height = sampleHeight;
 

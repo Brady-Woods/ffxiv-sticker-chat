@@ -290,7 +290,7 @@ public sealed unsafe class BubbleDecorator : IDisposable
         if (!registry.TryGet(path, out var sticker))
             return null;
 
-        var created = StickerParts.Create((Texture*)sticker.Pointer, sticker.Width, sticker.Height);
+        var created = StickerParts.Create((Texture*)sticker.Pointer, sticker);
         if (created is null)
         {
             Services.Log.Error($"Could not allocate UI-space parts list for {path}");

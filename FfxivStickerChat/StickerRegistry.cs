@@ -12,8 +12,21 @@ using FFXIVClientStructs.FFXIV.Client.Graphics.Kernel;
 
 namespace FfxivStickerChat;
 
-/// <summary>A loaded sticker: the native texture plus its pixel dimensions.</summary>
-public readonly record struct StickerTexture(nint Pointer, ushort Width, ushort Height);
+/// <summary>
+/// A loaded sticker: the native texture, its dimensions, and the region actually worth drawing.
+/// </summary>
+/// <param name="ContentX">Left edge of the opaque region within the image.</param>
+/// <param name="ContentY">Top edge of the opaque region within the image.</param>
+/// <param name="ContentWidth">Width of the opaque region.</param>
+/// <param name="ContentHeight">Height of the opaque region.</param>
+public readonly record struct StickerTexture(
+    nint Pointer,
+    ushort Width,
+    ushort Height,
+    ushort ContentX,
+    ushort ContentY,
+    ushort ContentWidth,
+    ushort ContentHeight);
 
 /// <summary>
 /// Loads sticker images off disk and hands out native <see cref="Texture"/> pointers the game's renderer
@@ -176,6 +189,11 @@ public sealed class StickerRegistry : IDisposable
 
                 var wrap = await shared.RentAsync().ConfigureAwait(false);
 
+                // Artwork is rarely centred inside its own canvas — one of these had 74 transparent
+                // pixels at the top and none at the bottom, so centring the canvas put the picture low.
+                // Measuring the opaque region lets the sticker be positioned by what you can actually see.
+                var content = await MeasureContentAsync(wrap, path).ConfigureAwait(false);
+
                 // ConvertToKernelTexture and the dictionary write both happen on the framework thread so we
                 // never hand a half-published pointer to the renderer.
                 await Services.Framework.Run(() =>
@@ -197,7 +215,14 @@ public sealed class StickerRegistry : IDisposable
                     entries[path] = new Entry
                     {
                         Wrap = wrap,
-                        Texture = new StickerTexture(texture, (ushort)wrap.Width, (ushort)wrap.Height),
+                        Texture = new StickerTexture(
+                            texture,
+                            (ushort)wrap.Width,
+                            (ushort)wrap.Height,
+                            content.X,
+                            content.Y,
+                            content.Width,
+                            content.Height),
                         // Four bytes per pixel is the decoded cost; the file size on disk is irrelevant.
                         Bytes = (long)wrap.Width * wrap.Height * 4,
                         LastUsedTicks = Interlocked.Increment(ref tick),
@@ -217,6 +242,71 @@ public sealed class StickerRegistry : IDisposable
                 inFlight.TryRemove(path, out _);
             }
         });
+    }
+
+    /// <summary>
+    /// Finds the bounding box of non-transparent pixels, falling back to the whole image.
+    /// </summary>
+    /// <remarks>
+    /// Readback can fail or return an unexpected format; a wrong crop would be far worse than no crop,
+    /// so anything unexpected falls back to the full canvas.
+    /// </remarks>
+    private static async Task<(ushort X, ushort Y, ushort Width, ushort Height)> MeasureContentAsync(
+        IDalamudTextureWrap wrap,
+        string path)
+    {
+        var full = ((ushort)0, (ushort)0, (ushort)wrap.Width, (ushort)wrap.Height);
+
+        try
+        {
+            var (spec, data) = await Services.TextureReadback
+                .GetRawImageAsync(wrap, leaveWrapOpen: true)
+                .ConfigureAwait(false);
+
+            // Both BGRA and RGBA put alpha in the fourth byte, which is all this needs.
+            var bytesPerPixel = spec.Pitch / Math.Max(1, spec.Width);
+            if (bytesPerPixel < 4)
+                return full;
+
+            int minX = spec.Width, minY = spec.Height, maxX = -1, maxY = -1;
+
+            for (var y = 0; y < spec.Height; y++)
+            {
+                var row = y * spec.Pitch;
+                if (row + (spec.Width * bytesPerPixel) > data.Length)
+                    break;
+
+                for (var x = 0; x < spec.Width; x++)
+                {
+                    if (data[row + (x * bytesPerPixel) + 3] == 0)
+                        continue;
+
+                    if (x < minX) minX = x;
+                    if (x > maxX) maxX = x;
+                    if (y < minY) minY = y;
+                    if (y > maxY) maxY = y;
+                }
+            }
+
+            if (maxX < 0 || maxY < 0)
+                return full; // fully transparent
+
+            var result = ((ushort)minX, (ushort)minY, (ushort)(maxX - minX + 1), (ushort)(maxY - minY + 1));
+
+            if (result.Item3 != wrap.Width || result.Item4 != wrap.Height)
+            {
+                Services.Log.Information(
+                    $"Trimmed {Path.GetFileName(path)} to its content: " +
+                    $"{wrap.Width}x{wrap.Height} -> {result.Item3}x{result.Item4} at ({result.Item1},{result.Item2})");
+            }
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            Services.Log.Warning(ex, $"Could not measure content bounds for {path}; using the full image");
+            return full;
+        }
     }
 
     public void Dispose()
