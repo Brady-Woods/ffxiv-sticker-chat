@@ -1,162 +1,151 @@
 # Sticker Chat
 
-A Dalamud plugin proof of concept: when someone sends a chat message made up **only** of auto-translate
-phrases, replace their chat bubble with a sticker image.
+A Dalamud plugin for FFXIV. When someone sends a chat message made up **only** of auto-translate phrases,
+their chat bubble is replaced with a sticker image.
 
-Receive-only. This plugin never sends chat — you send auto-translate yourself, the normal way.
+**Receive-only.** The plugin never sends chat and never reads your chat log — you send auto-translate
+yourself, the normal way.
+
+> **Alpha.** Bubble replacement works and is confirmed in-game. Expect rough edges, and see
+> [Not done yet](#not-done-yet).
 
 ## Why auto-translate
 
-Auto-translate tokens decode to a `(Group, Key)` integer pair that is identical on every client regardless
-of game language. That makes them a clean, language-independent transport for a sticker ID. Players
-*without* the plugin see an ordinary auto-translate phrase rather than garbage, so the degradation is
-graceful.
+An auto-translate phrase decodes to a `(Group, Key)` integer pair that is identical on every client
+regardless of game language. That makes it a clean, language-independent id for a sticker.
 
-The binding is 1:1 — one phrase, one sticker.
+Matching is on that id, never on the words — so typing the same text by hand does nothing. Players
+*without* the plugin just see an ordinary auto-translate phrase, so the degradation is graceful.
 
-## Status
+## How it works
 
-| Piece | State |
+The plugin hooks `RaptureLogModule.ShowMiniTalkPlayer`, which the game calls to open a chat bubble. That
+runs *before* the game expands auto-translate into brackets-and-text, so the `(Group, Key)` pair is still
+intact — and it supplies the sender, their world, and whether they are the local player.
+
+Rendering reuses an `AtkImageNode` already inside the bubble: the node is pointed at a private one-part
+list bound to the sticker texture, resized, and the bubble's text hidden. Every field touched is
+snapshotted first and restored when the bubble is recycled or the plugin unloads.
+
+Patch 7.3 split bubbles across two addons — `_MiniTalk` for NPC balloons and **`MiniTalkPlayer`** for
+player chat. The latter has no struct in FFXIVClientStructs and no published node-ID map, so nodes are
+found by *type* rather than by id.
+
+## Sticker packs
+
+A pack is the unit of sharing: a name, an owner, and a set of phrase→image bindings.
+
+```
+pluginConfigs/FfxivStickerChat/
+  packs/<packId>/pack.json
+  packs/<packId>/media/<sha256>.png
+```
+
+Each pack owns its media, so deleting one is a single directory removal with nothing orphaned. Images are
+named by content hash, so adding the same image twice stores it once.
+
+**Ownership is stamped, not chosen.** A pack records the character it was created on and carries that
+through export, so importing a friend's pack pairs it to them automatically — and nobody can retarget
+someone else's pack at an arbitrary character. Imported packs are read-only; you only author your own.
+
+### Limits
+
+Following [Telegram's static sticker spec](https://core.telegram.org/stickers), so art made for Telegram
+works here unmodified:
+
+| | |
 |---|---|
-| Auto-translate detection | Works. `AutoTranslateDetector` + the Dalamud 15 `IChatGui.ChatMessage` API. |
-| Sticker loading | Works. Disk PNG → `ConvertToKernelTexture` → native `Texture*`. |
-| Config / binding UI | Works. Binds from a list of phrases actually seen in chat. |
-| Bubble inspector | Works. Read-only. |
-| Bubble replacement | **Unverified — needs an in-game pass.** See below. |
+| Format | `.png` |
+| Size | one side exactly 512px, the other ≤512px |
+| File | ≤512 KB |
+| Per pack | ≤120 stickers |
 
-## The thing to verify first
+PNG only. Telegram also allows WebP, but whether Dalamud decodes WebP under Proton could not be verified,
+and a format that validates then silently fails to render is worse than one refused up front.
 
-Patch 7.3 (Aug 2025) added native chat bubbles and split them across two addons:
+### Sharing
 
-- `_MiniTalk` — NPC speech balloons. Mapped in FFXIVClientStructs as `AddonMiniTalk`.
-- `MiniTalkPlayer` — **player** chat bubbles. No struct exists for it anywhere.
-
-Everything this plugin cares about is in `MiniTalkPlayer`, and no public node-ID map exists for its ULD.
-`MiniTalk.cs` therefore finds nodes by **type** rather than by ID, because the one published ID data point
-for each addon disagrees about what ID 4 means.
-
-Two things need eyes on them in-game. Open the inspector with `/stickerchat debug`:
-
-1. **What is the image node?** Best evidence says it's the bubble's tail — a 32×32 sprite at texture
-   coordinates near `(0, 992)` that slides horizontally to point at the speaker. The inspector flags a part
-   matching that fingerprint. If it matches, `BubbleDecorator` is currently stretching the tail into a
-   sticker, which works but is a bit of a hack; the clean fix is allocating our own node.
-   If the node has **no** PartsList, it's spare and taking it is free.
-
-2. **Does the balloon queue cover player bubbles?** `AgentScreenLog.BalloonQueue` carries an `ObjectId`,
-   which would give per-actor targeting with no signature hook. FFXIVClientStructs flags the
-   slot↔bubble correspondence as unverified. If the queue stays empty while player bubbles are on screen,
-   that route is NPC-only and per-actor work needs a hook on `RaptureLogModule.ShowMiniTalkPlayer`
-   (fully signatured, gives sender/message/world).
-
-Until #1 is confirmed, treat sticker rendering as a hypothesis, not a feature.
-
-## Design notes
-
-**Matching is by text, not by actor.** Since phrase↔sticker is 1:1, the bubble's rendered text alone
-identifies the sticker. That deliberately sidesteps mapping a bubble back to a `GameObject` — a mapping
-the game doesn't expose cleanly. The tradeoff: two people sending the same sticker at once are
-indistinguishable, which is harmless because they'd get the same sticker anyway.
-
-**Every edit is reversible.** Before overwriting a node we snapshot the texture union pointer, its
-`TextureType`, the part rect, and node geometry/visibility, and restore all of it when the bubble is
-recycled or the plugin unloads. We never call `ReleaseTexture` on a texture the game owns.
-
-**Known hazard:** `AtkUldAsset`s are shared across an addon's parts, so retargeting one bubble's image may
-change the same element in other simultaneously-visible bubbles. Blast radius is small and fully undone on
-restore. The clean fix is allocating our own `AtkUldPartsList` and node — see
-[KamiToolKit](https://github.com/MidoriKami/KamiToolKit), whose `ImGuiImageNode` does exactly this, and
-Ktisis's `BalloonNode.cs` for a working chat balloon built that way.
+Export writes a zip; import reads one. An archive is treated as untrusted input — paths are confined to
+`media/`, sizes are capped, and every file's bytes are hashed and checked against the name it claims.
 
 ## Installing
 
-### Via custom repository
+### Custom repository
 
-Dalamud settings → **Experimental** → *Custom Plugin Repositories* → add:
-
-```
-https://raw.githubusercontent.com/bradywoods/ffxiv-sticker-chat/main/repo.json
-```
-
-> ⚠️ **Change the owner/repo first.** `repo.json`, the workflows, and `FfxivStickerChat.csproj` all say
-> `bradywoods/ffxiv-sticker-chat` as a placeholder. Update those three before publishing, or the download
-> links resolve to nothing.
-
-The download links point at `/releases/latest/download/latest.zip`, so they never need editing — cutting a
-release is enough:
+Dalamud → **Settings → Experimental → Custom Plugin Repositories**, add:
 
 ```
-git tag v0.0.0.2 && git push origin v0.0.0.2
+https://raw.githubusercontent.com/Brady-Woods/ffxiv-sticker-chat/main/repo.json
 ```
 
-That builds, attaches `latest.zip` to a GitHub release, and commits the new `AssemblyVersion` /
-`LastUpdate` back into `repo.json`.
+This is an alpha and is marked testing-exclusive, so enable **Get plugin testing builds** in the same
+settings page or it will not appear.
 
-### Via dev plugin (no repo needed)
+### Dev plugin
 
-Faster for iterating. Build, then in Dalamud settings → **Experimental** → *Dev Plugin Locations*, add the
-folder containing `FfxivStickerChat.dll`:
+Build, then add the folder containing `FfxivStickerChat.dll` under **Dev Plugin Locations**.
 
-```
-FfxivStickerChat\bin\x64\Debug\
-```
+## Usage
 
-`DalamudPackager` also writes a ready-to-ship bundle to
-`FfxivStickerChat\bin\x64\Release\FfxivStickerChat\latest.zip` on a Release build.
+1. `/stickerchat` → **Packs** tab → your pack is created automatically.
+2. **Add sticker** → pick a phrase from the dropdown → **Choose image**.
+3. **Preview** shows the sticker on your own character. Local only; nothing is sent.
+4. Send that auto-translate phrase in chat.
+
+`/stickerchat debug` opens a node inspector for the bubble addons.
+
+### If a sticker doesn't appear
+
+The game has its **own** per-channel bubble settings, and a channel disabled there produces no bubble at
+all — so the plugin never sees the message. Check **Character Configuration → Log Window Settings → Chat
+Bubbles**. The Channels list shows both switches side by side for exactly this reason.
+
+Native bubbles are also suppressed during combat, in PvP, and while using performance actions.
 
 ## Building
 
-Requires **Windows**, .NET 10 SDK, and XIVLauncher/Dalamud installed (the SDK resolves game assemblies
-from `%APPDATA%\XIVLauncher\addon\Hooks\dev\`).
+Requires the .NET 10 SDK and a Dalamud install. Targets `Dalamud.NET.Sdk/15.0.0` (API level 15).
 
 ```
 dotnet build -c Debug
 ```
 
-Then add `bin\x64\Debug\FfxivStickerChat.json` as a dev plugin in Dalamud settings.
-
-Targets `Dalamud.NET.Sdk/15.0.0` (API 15). Compiles clean (0 errors, 0 warnings) against the Dalamud 15
-dev distribution.
-
-If the SDK can't find your Dalamud install, point it at one explicitly:
+If the SDK can't locate Dalamud, point it at one explicitly — useful on Linux, where XIVLauncher.Core
+keeps it under `~/.xlcore`:
 
 ```
-dotnet build -c Debug -p:DalamudLibPath=/path/to/dalamud/Hooks/dev/
+dotnet build -c Debug -p:DalamudLibPath="$HOME/.xlcore/dalamud/Hooks/dev/"
 ```
 
-## Usage
+A Release build also produces `bin/x64/Release/FfxivStickerChat/latest.zip`, the artifact published to
+releases.
 
-1. Drop PNGs somewhere on disk.
-2. Have someone send an auto-translate-only message (or send one yourself).
-3. `/stickerchat` → the phrase appears under "seen this session" → **Bind** → paste the image path.
-4. Next time that phrase is sent, the bubble becomes the sticker.
-
-`/stickerchat debug` opens the inspector.
-
-## Limitations inherited from native bubbles
-
-Native bubbles are suppressed in combat, during PvP, and while using performance actions. Stickers go
-quiet in those contexts, and that can't be overridden without either patching the game's check or
-abandoning native bubbles for an ImGui overlay.
-
-## Layout
+## Releasing
 
 ```
-FfxivStickerChat/
-  Plugin.cs                  wiring, chat handler, seen-phrase log
-  Services.cs                Dalamud service container
-  Configuration.cs           settings + phrase→image bindings
-  AutoTranslateDetector.cs   "is this message only auto-translate?"
-  StickerRegistry.cs         PNG → native Texture*, cached, async
-  MiniTalk.cs                addon/node discovery by type
-  BubbleDecorator.cs         apply + restore
-  Windows/ConfigWindow.cs
-  Windows/DebugWindow.cs     the inspector
+git tag v0.1.0-alpha.2 && git push origin v0.1.0-alpha.2
 ```
+
+That builds, attaches `latest.zip` to a GitHub release, and commits the new version back into `repo.json`.
+
+Note that Dalamud requires a four-part numeric `AssemblyVersion`, which cannot carry a semver prerelease
+identifier. The assembly is versioned `0.1.0.0`; the `-alpha.N` lives on the git tag and the release.
+
+## Not done yet
+
+- **Syncing packs between players.** Snowcloak exposes a third-party extension API, but it allows 4 KB per
+  plugin — enough for a manifest, nowhere near enough for images. Manual zip export/import works today.
+- **A default sticker pack.** Job icons would mean redistributing Square Enix artwork; the intended route
+  is referencing the icons already in the player's own game install.
+- **Chat log replacement.** The log is a single text node with no per-line geometry, so inline images
+  would mean reconstructing layout the game doesn't expose.
 
 ## Prior art
 
-[Haplo064/ChatBubbles](https://github.com/Haplo064/ChatBubbles) — retired July 2025, days before 7.3 made
-it redundant. Worth reading for its per-frame node manipulation, but don't fork it: its struct offsets are
-stale, it targets API 12, and the balloon-hijacking machinery that made it clever is obsolete now that the
-game spawns player bubbles natively.
+[Haplo064/ChatBubbles](https://github.com/Haplo064/ChatBubbles) — retired July 2025, days before patch 7.3
+made it redundant. Worth reading for its per-frame node manipulation, though its struct offsets are stale
+and the balloon-triggering machinery is obsolete now that the game spawns player bubbles natively.
+
+## Licence
+
+AGPL-3.0-or-later.

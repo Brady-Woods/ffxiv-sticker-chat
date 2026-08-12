@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Dalamud.Interface.Textures;
 using Dalamud.Interface.Textures.TextureWraps;
 using FFXIVClientStructs.FFXIV.Client.Graphics.Kernel;
 
@@ -52,6 +54,12 @@ public sealed class StickerRegistry : IDisposable
     {
         this.config = config;
     }
+
+    /// <summary>Prefix marking a cache key as a game icon rather than a file on disk.</summary>
+    private const string GameIconPrefix = "icon:";
+
+    /// <summary>Builds the cache key for a game icon.</summary>
+    public static string GameIconKey(uint iconId) => GameIconPrefix + iconId.ToString(CultureInfo.InvariantCulture);
 
     /// <summary>Approximate decoded size of everything currently cached.</summary>
     public long TotalBytes => entries.Values.Sum(e => e.Bytes);
@@ -146,7 +154,9 @@ public sealed class StickerRegistry : IDisposable
         if (!inFlight.TryAdd(path, 0))
             return;
 
-        if (!File.Exists(path))
+        var isGameIcon = path.StartsWith(GameIconPrefix, StringComparison.Ordinal);
+
+        if (!isGameIcon && !File.Exists(path))
         {
             Services.Log.Warning($"Sticker image not found: {path}");
             inFlight.TryRemove(path, out _);
@@ -157,7 +167,14 @@ public sealed class StickerRegistry : IDisposable
         {
             try
             {
-                var wrap = await Services.TextureProvider.GetFromFile(path).RentAsync().ConfigureAwait(false);
+                // A game icon comes from the player's own installation, so it loads through the same
+                // path as a file but without anything being copied or shipped.
+                var shared = isGameIcon
+                    ? Services.TextureProvider.GetFromGameIcon(
+                        new GameIconLookup(uint.Parse(path[GameIconPrefix.Length..], CultureInfo.InvariantCulture)))
+                    : Services.TextureProvider.GetFromFile(path);
+
+                var wrap = await shared.RentAsync().ConfigureAwait(false);
 
                 // ConvertToKernelTexture and the dictionary write both happen on the framework thread so we
                 // never hand a half-published pointer to the renderer.
@@ -186,7 +203,9 @@ public sealed class StickerRegistry : IDisposable
                         LastUsedTicks = Interlocked.Increment(ref tick),
                     };
 
-                    Services.Log.Information($"Sticker ready: {Path.GetFileName(path)} ({wrap.Width}x{wrap.Height})");
+                    Services.Log.Information(
+                        $"Sticker ready: {(isGameIcon ? path : Path.GetFileName(path))} " +
+                        $"({wrap.Width}x{wrap.Height})");
                 }).ConfigureAwait(false);
             }
             catch (Exception ex)

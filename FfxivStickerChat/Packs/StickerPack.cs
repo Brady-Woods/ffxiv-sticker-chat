@@ -15,8 +15,17 @@ public sealed class PackEntry
     /// <summary>The rendered phrase. Display only — matching is on group/key.</summary>
     public string Phrase { get; set; } = string.Empty;
 
-    /// <summary>SHA-256 of the image bytes, lowercase hex. Names the file in the shared media store.</summary>
+    /// <summary>SHA-256 of the image bytes, lowercase hex. Names the file in the pack's media folder.</summary>
     public string Media { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Game icon id to use instead of a file, or 0 for a normal image.
+    /// </summary>
+    /// <remarks>
+    /// Lets a pack point at artwork the player already has installed rather than carrying a copy of it.
+    /// Nothing is downloaded, nothing is redistributed, and the art always matches their game version.
+    /// </remarks>
+    public uint GameIconId { get; set; }
 
     /// <summary>File extension including the dot, e.g. <c>.png</c>.</summary>
     public string Extension { get; set; } = ".png";
@@ -72,6 +81,15 @@ public sealed class StickerPack
 
     /// <summary>True for the pack this user edits and exports.</summary>
     public bool IsLocal { get; set; }
+
+    /// <summary>
+    /// True for a pack the plugin ships and manages. Not editable, not exportable.
+    /// </summary>
+    /// <remarks>
+    /// A built-in pack references game icons only, so it can be regenerated on every launch instead of
+    /// being stored, and it never carries artwork that is not already on the player's disk.
+    /// </remarks>
+    public bool IsBuiltIn { get; set; }
 
     /// <summary>Finds an enabled entry for a phrase id.</summary>
     public PackEntry? Find(uint group, uint key)

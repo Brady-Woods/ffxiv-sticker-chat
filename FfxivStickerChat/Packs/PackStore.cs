@@ -284,9 +284,18 @@ public sealed class PackStore
         return hash;
     }
 
-    /// <summary>Resolves an entry to an absolute image path, or null when the media is missing.</summary>
+    /// <summary>
+    /// Resolves an entry to something <see cref="StickerRegistry"/> can load.
+    /// </summary>
+    /// <returns>
+    /// An absolute file path, or a <c>icon:&lt;id&gt;</c> key for artwork that lives in the game files.
+    /// Null when the entry has no usable source.
+    /// </returns>
     public string? ResolveMedia(StickerPack pack, PackEntry entry)
     {
+        if (entry.GameIconId != 0)
+            return StickerRegistry.GameIconKey(entry.GameIconId);
+
         if (string.IsNullOrEmpty(entry.Media))
             return null;
 
