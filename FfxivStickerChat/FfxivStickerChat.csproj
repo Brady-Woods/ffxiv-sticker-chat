@@ -1,7 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
   <PropertyGroup>
-    <Version>0.1.0.1</Version>
+    <!--
+      Dalamud decides whether an update exists by comparing this number, so it must be bumped for every
+      release even when the semver prerelease identifier on the tag already changed. A release that
+      reuses it installs cleanly for new users and is invisible to existing ones.
+    -->
+    <Version>0.1.0.2</Version>
     <PackageProjectUrl>https://github.com/Brady-Woods/ffxiv-sticker-chat</PackageProjectUrl>
     <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
     <IsPackable>false</IsPackable>
