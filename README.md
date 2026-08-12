@@ -75,6 +75,18 @@ capped while streaming, and the payload must actually be a zip. Passing that onl
 as the importer, which independently re-validates every entry — paths confined to `media/`, sizes capped,
 and each file hashed against the name it claims.
 
+The manifest gets the same treatment, because it decides where files land and how the pack behaves:
+
+- **The pack id must be a plain 32-hex-digit GUID.** It names a folder, and `Path.Combine` discards its
+  base directory when handed a rooted path — so an id of `C:\Windows\Temp\evil` would write outside the
+  store entirely. Requiring the exact generated form rejects every such shape rather than blocklisting
+  the ones somebody thought of.
+- **Priority is assigned locally, never read from the archive**, so an imported pack cannot outrank the
+  packs you already have.
+- **An import can never replace a pack you authored**, even one claiming the same id.
+- **A pack must name an owner.** An unowned pack matches every speaker, which would put its stickers
+  over everyone's head.
+
 Share links point at a web page rather than the file, so they are rewritten to the host's direct
 download form automatically — paste the link you'd normally send someone:
 
@@ -149,7 +161,7 @@ releases.
 ## Releasing
 
 ```
-git tag v0.1.0-alpha.2 && git push origin v0.1.0-alpha.2
+git tag v0.1.0-alpha.3 && git push origin v0.1.0-alpha.3
 ```
 
 That builds, attaches `latest.zip` to a GitHub release, and commits the new version back into `repo.json`.
