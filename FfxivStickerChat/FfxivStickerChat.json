@@ -2,7 +2,7 @@
   "Author": "brady.woods",
   "Name": "Sticker Chat",
   "Punchline": "Turns auto-translate phrases into stickers over players' heads.",
-  "Description": "When someone sends a chat message made up only of auto-translate phrases, replaces their native chat bubble with a sticker image. Mapping is 1:1 and user configurable. Receive-only: this plugin never sends chat.",
+  "Description": "When someone sends a chat message made up only of auto-translate phrases, replaces their native chat bubble with a sticker image. Mapping is 1:1 and user configurable. Receive-only: this plugin never sends chat and never reads your chat log.\n\nStickers live in packs, stamped with the character that authored them. Share one as a zip, an https link, or automatically with your Snowcloak pairs. Pack sync is off by default, only ever sends a link rather than images, and will not install a pack unless it belongs to the character sharing it.\n\nPlayers without the plugin just see an ordinary auto-translate phrase.\n\nAlpha: bubble replacement works and is confirmed in-game, but expect rough edges. Use /stickerchat to configure and /stickerchat debug to inspect bubble nodes.",
   "ApplicableVersion": "any",
   "Tags": [
     "chat",

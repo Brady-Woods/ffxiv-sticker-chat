@@ -13,6 +13,12 @@
         "requested": "[1.2.39, )",
         "resolved": "1.2.39",
         "contentHash": "fcFN01tDTIQqDuTwr1jUQK/geofiwjG5DycJQOnC72i1SsLAk1ELe+apBOuZ11UMQG8YKFZG1FgvjZPbqHyatg=="
+      },
+      "Snowcloak.Ipc": {
+        "type": "Direct",
+        "requested": "[1.4.0.1, )",
+        "resolved": "1.4.0.1",
+        "contentHash": "E/nNiVleSkIbfgJ/v/H4j2rgwTbeiVFRen22rRfo6pBVHXIrYDdcYYtCXGelcfXDaIQ/+Qv25jB7aPWu/tDaXw=="
       }
     }
   }

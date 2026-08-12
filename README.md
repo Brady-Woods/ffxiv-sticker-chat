@@ -4,7 +4,8 @@ A Dalamud plugin for FFXIV. When someone sends a chat message made up **only** o
 their chat bubble is replaced with a sticker image.
 
 **Receive-only.** The plugin never sends chat and never reads your chat log — you send auto-translate
-yourself, the normal way.
+yourself, the normal way. It makes no network requests at all unless you turn on
+[pack sync](#syncing-with-snowcloak) or paste a download link yourself.
 
 > **Alpha.** Bubble replacement works and is confirmed in-game. Expect rough edges, and see
 > [Not done yet](#not-done-yet).
@@ -169,10 +170,40 @@ That builds, attaches `latest.zip` to a GitHub release, and commits the new vers
 Note that Dalamud requires a four-part numeric `AssemblyVersion`, which cannot carry a semver prerelease
 identifier. The assembly is versioned `0.1.0.0`; the `-alpha.N` lives on the git tag and the release.
 
+### Syncing with Snowcloak
+
+If you use [Snowcloak](https://snowcloak-sync.com), packs can travel to the players you are already
+paired with. **Off by default in both directions**, under the **Sync** tab.
+
+The extension channel allows about 4 KB per plugin, so images cannot go through it. What is published is
+a *pointer* — pack id, name, archive hash, download URL — and the recipient fetches the zip themselves.
+So a shared pack needs a download URL and an export; the tab says so when one is missing.
+
+Snowcloak is the only client this can work with. The other Mare forks call *into* plugins like Penumbra
+but expose no channel for a third-party plugin's own data to travel with a character, and adding one
+would be a change to their server as well as their client.
+
+Receiving is automatic — anything a pair advertises installs without a prompt. Three rules keep that from
+being something you'd regret:
+
+- **Downloads only from known hosts** (the GitHub / Google Drive / Dropbox / OneDrive set above). Without
+  that, a pair could point your client at a server they run and learn your IP whenever they liked.
+  Re-checked at every redirect hop.
+- **A pack must belong to the character sharing it.** Ownership is self-declared inside the zip and is
+  what sticker matching compares a speaker against — so without this check any pair could put their
+  stickers over a third party's head. The character is resolved from the game's own object table, not
+  from anything self-reported. A pack that fails is refused before a single byte is written.
+- **A pack is pinned to the pair it first came from**, so a second pair cannot take it over by claiming
+  the same id.
+
+Installing a pack contacts the host holding it, which tells that host your IP — the same as opening the
+link in a browser. The plugin says so once, before either switch can be turned on.
+
+Synced packs are held to a disk budget and the least recently seen are dropped when it is exceeded. Packs
+you authored or imported yourself are never touched.
+
 ## Not done yet
 
-- **Syncing packs between players.** Snowcloak exposes a third-party extension API, but it allows 4 KB per
-  plugin — enough for a manifest, nowhere near enough for images. Manual zip export/import works today.
 - **A default sticker pack.** Job icons would mean redistributing Square Enix artwork; the intended route
   is referencing the icons already in the player's own game install.
 - **Chat log replacement.** The log is a single text node with no per-line geometry, so inline images

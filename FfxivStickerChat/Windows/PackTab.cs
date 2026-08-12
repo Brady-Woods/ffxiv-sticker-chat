@@ -143,7 +143,7 @@ public sealed class PackTab
         else if (!string.IsNullOrEmpty(status))
             ImGui.TextWrapped(status);
 
-        if (!ImGui.BeginTable("##packs", 6, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
+        if (!ImGui.BeginTable("##packs", 7, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
             return;
 
         ImGui.TableSetupColumn("On", ImGuiTableColumnFlags.WidthFixed, 30);
@@ -151,6 +151,7 @@ public sealed class PackTab
         ImGui.TableSetupColumn("Bindings", ImGuiTableColumnFlags.WidthFixed, 70);
         ImGui.TableSetupColumn("Owner", ImGuiTableColumnFlags.WidthFixed, 170);
         ImGui.TableSetupColumn("Size", ImGuiTableColumnFlags.WidthFixed, 70);
+        ImGui.TableSetupColumn("Sync", ImGuiTableColumnFlags.WidthFixed, 90);
         ImGui.TableSetupColumn("##actions", ImGuiTableColumnFlags.WidthFixed, 70);
         ImGui.TableHeadersRow();
 
@@ -180,6 +181,9 @@ public sealed class PackTab
 
             ImGui.TableNextColumn();
             ImGui.TextUnformatted(FormatSize(store.GetPackSize(pack.Id)));
+
+            ImGui.TableNextColumn();
+            DrawSyncCell(pack);
 
             ImGui.TableNextColumn();
             if (pendingDeleteId == pack.Id)
@@ -221,6 +225,57 @@ public sealed class PackTab
         }
 
         ImGui.EndTable();
+    }
+
+    /// <summary>
+    /// One word for where a pack stands with sync, with the long version on hover.
+    /// </summary>
+    /// <remarks>
+    /// A column rather than a second list: a pack is one thing whether it came from a file, a URL or a
+    /// pair, and splitting them by origin would mean looking in two places to answer "why is this not
+    /// working".
+    /// </remarks>
+    private void DrawSyncCell(StickerPack pack)
+    {
+        var sync = plugin.PackSync;
+        var state = sync.GetStateFor(pack);
+        var detail = sync.GetStatusFor(pack);
+
+        var (label, colour) = state switch
+        {
+            Sync.SyncState.Shared => ("Shared", new Vector4(0.5f, 0.85f, 0.5f, 1f)),
+            Sync.SyncState.Downloading => ("Downloading", new Vector4(0.6f, 0.8f, 1f, 1f)),
+            Sync.SyncState.Installed => ("Synced", new Vector4(0.5f, 0.85f, 0.5f, 1f)),
+            Sync.SyncState.Outdated => ("Update", new Vector4(1f, 0.85f, 0.4f, 1f)),
+            Sync.SyncState.Offered => ("Offered", new Vector4(0.7f, 0.7f, 0.7f, 1f)),
+            Sync.SyncState.Failed => ("Failed", new Vector4(1f, 0.5f, 0.4f, 1f)),
+            _ => (string.Empty, Vector4.Zero),
+        };
+
+        if (label.Length == 0)
+        {
+            // Say nothing rather than "no", but still explain a local pack that cannot be shared.
+            if (detail.Length > 0)
+            {
+                ImGui.TextDisabled("—");
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip(detail);
+            }
+
+            return;
+        }
+
+        ImGui.TextColored(colour, label);
+
+        if (detail.Length > 0 && ImGui.IsItemHovered())
+            ImGui.SetTooltip(detail);
+
+        if (state == Sync.SyncState.Failed)
+        {
+            ImGui.SameLine();
+            if (ImGui.SmallButton("Retry"))
+                sync.RetryNow(pack.Id);
+        }
     }
 
     /// <summary>

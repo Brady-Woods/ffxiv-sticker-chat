@@ -23,6 +23,7 @@ public sealed class ConfigWindow : Window, IDisposable
     private readonly StickerRegistry registry;
     private readonly FileDialogManager fileDialogs = new();
     private readonly PackTab packTab;
+    private readonly SyncTab syncTab;
 
     private string phraseFilter = string.Empty;
 
@@ -33,6 +34,7 @@ public sealed class ConfigWindow : Window, IDisposable
         this.registry = registry;
         config = plugin.Configuration;
         packTab = new PackTab(plugin, registry, fileDialogs);
+        syncTab = new SyncTab(plugin);
 
         SizeConstraints = new WindowSizeConstraints
         {
@@ -50,6 +52,12 @@ public sealed class ConfigWindow : Window, IDisposable
             if (ImGui.BeginTabItem("Packs"))
             {
                 packTab.Draw();
+                ImGui.EndTabItem();
+            }
+
+            if (ImGui.BeginTabItem("Sync"))
+            {
+                syncTab.Draw();
                 ImGui.EndTabItem();
             }
 
