@@ -78,8 +78,9 @@ Dalamud → **Settings → Experimental → Custom Plugin Repositories**, add:
 https://raw.githubusercontent.com/Brady-Woods/ffxiv-sticker-chat/main/repo.json
 ```
 
-This is an alpha and is marked testing-exclusive, so enable **Get plugin testing builds** in the same
-settings page or it will not appear.
+Save, and **Sticker Chat** appears in `/xlplugins`. It is an alpha — the 0.x version and the `-alpha`
+release tag say so — but it is not gated behind Dalamud's testing-builds toggle, which would otherwise
+hide it unless you had that enabled.
 
 ### Dev plugin
 

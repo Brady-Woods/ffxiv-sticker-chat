@@ -25,7 +25,7 @@
     "LoadPriority": 0,
     "AcceptsFeedback": true,
     "IsHide": false,
-    "IsTestingExclusive": true,
+    "IsTestingExclusive": false,
     "DownloadCount": 0,
     "LastUpdate": 1786495731,
     "DownloadLinkInstall": "https://github.com/Brady-Woods/ffxiv-sticker-chat/releases/download/v0.1.0-alpha.2/latest.zip",
