@@ -444,44 +444,76 @@ public sealed unsafe class BubbleDecorator : IDisposable
 
         if (config.FitBubbleToSticker && nodes.NineGrids.Count > 0)
         {
-            // Every nine-grid, not just the sticker's siblings: the bubble is drawn as stacked frame
-            // layers under different parents, and resizing one leaves the others at full size.
+            // The bubble is drawn as several stacked layers that do not share an origin. Resizing each
+            // about its own centre lets them drift apart, which shows as one layer poking out past the
+            // bubble's edge. So one layer is the reference, and every other layer is moved by the same
+            // delta - keeping their original relative arrangement intact.
+            AtkResNode* reference = null;
+
+            foreach (var candidate in nodes.NineGrids)
+            {
+                var nineGrid = (AtkResNode*)candidate;
+                if (nineGrid->ParentNode != parent)
+                    continue;
+
+                reference = nineGrid;
+                break;
+            }
+
+            if (reference is null)
+                reference = (AtkResNode*)nodes.NineGrids[0];
+
+            var refX = reference->X;
+            var refY = reference->Y;
+            var refWidth = reference->Width;
+            var refHeight = reference->Height;
+
+            // Horizontally centred on where the bubble already was; bottom pinned so it grows upward
+            // and stays attached to the tail.
+            var newRefX = refX + ((refWidth - frameWidth) / 2f);
+            var newRefY = refY + refHeight - frameHeight;
+
+            var deltaX = newRefX - refX;
+            var deltaY = newRefY - refY;
+
             foreach (var candidate in nodes.NineGrids)
             {
                 var frame = (AtkResNode*)candidate;
 
-                var originalX = frame->X;
-                var originalY = frame->Y;
-                var originalWidth = frame->Width;
-                var originalHeight = frame->Height;
-
                 if (state is not null && !state.Resized.Exists(r => r.Node == candidate))
-                    state.Resized.Add((candidate, originalX, originalY, originalWidth, originalHeight));
-
-                // Grow upward: the bottom edge is where the tail meets the bubble, so pinning it keeps
-                // the tail attached and stops the bubble from descending over the character's head.
-                var newX = originalX + ((originalWidth - frameWidth) / 2f);
-                var newY = originalY + originalHeight - frameHeight;
+                    state.Resized.Add((candidate, frame->X, frame->Y, frame->Width, frame->Height));
 
                 frame->SetWidth(frameWidth);
                 frame->SetHeight(frameHeight);
-                frame->SetPositionFloat(newX, newY);
-
-                if (frame->ParentNode == parent)
-                {
-                    targetX = newX;
-                    targetY = newY;
-                    targetWidth = frameWidth;
-                    targetHeight = frameHeight;
-                }
+                frame->SetPositionFloat(frame->X + deltaX, frame->Y + deltaY);
             }
+
+            // Move the tail by the same delta so it stays joined to the frame instead of being left
+            // behind as a detached fragment.
+            foreach (var candidate in nodes.Images)
+            {
+                if (candidate == (nint)node)
+                    continue;
+
+                var decoration = (AtkResNode*)candidate;
+
+                if (state is not null && !state.Resized.Exists(r => r.Node == candidate))
+                    state.Resized.Add((candidate, decoration->X, decoration->Y, decoration->Width, decoration->Height));
+
+                decoration->SetPositionFloat(decoration->X + deltaX, decoration->Y + deltaY);
+            }
+
+            targetX = newRefX;
+            targetY = newRefY;
+            targetWidth = frameWidth;
+            targetHeight = frameHeight;
 
             if (state is not null && !state.LoggedFrames)
             {
                 state.LoggedFrames = true;
                 Services.Log.Information(
                     $"Bubble fit: {nodes.NineGrids.Count} frame layer(s) -> {frameWidth}x{frameHeight}, " +
-                    $"sticker footprint {footprintWidth:0}x{footprintHeight:0}, padding {padding:0}");
+                    $"delta ({deltaX:0.#},{deltaY:0.#}), sticker {footprintWidth:0}x{footprintHeight:0}");
             }
         }
 
