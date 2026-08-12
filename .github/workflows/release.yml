@@ -51,7 +51,11 @@ jobs:
         with:
           files: .\FfxivStickerChat\bin\x64\Release\FfxivStickerChat\latest.zip
           tag_name: ${{ github.ref_name }}
-          name: v${{ steps.manifest.outputs.version }}
+          # Name from the tag, not the assembly version: Dalamud needs a four-part numeric
+          # AssemblyVersion, so it cannot carry the -alpha/-beta identifier the tag does.
+          name: ${{ github.ref_name }}
+          # Any tag with a hyphen is a semver prerelease (v0.1.0-alpha.1); plain v1.2.3 is not.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
 
       - name: Update repo.json
