@@ -158,7 +158,9 @@ public static class PackDownloader
         using var handler = new HttpClientHandler { AllowAutoRedirect = false };
         using var client = new HttpClient(handler) { Timeout = Timeout };
 
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("FfxivStickerChat");
+        // Deliberately generic. Naming the plugin would tell every host a pack is fetched from that the
+        // requester runs a third-party FFXIV addon, which is not theirs to learn.
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0");
 
         var current = uri;
 

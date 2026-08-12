@@ -140,6 +140,37 @@ public static class PackArchive
             if (pack is null || string.IsNullOrWhiteSpace(pack.Id))
                 return new PackTransferResult(false, "pack.json is not a valid sticker pack.");
 
+            // Checked before anything is written, because the id names the folder every image below
+            // lands in. An id like "..\..\..\evil" or "C:\Windows\Temp\evil" would otherwise place
+            // attacker-chosen files anywhere on disk, and a later delete of that pack would take the
+            // whole target directory with it.
+            if (!PackStore.IsValidPackId(pack.Id))
+            {
+                return new PackTransferResult(false,
+                    "That pack has a malformed id. It was not written by this plugin, and importing it " +
+                    "would write files outside the sticker folder.");
+            }
+
+            // The owner is what pairs a pack to a speaker. An empty one matches every player, so a pack
+            // without one would put its stickers over everybody's head.
+            if (string.IsNullOrEmpty(pack.OwnerName))
+            {
+                return new PackTransferResult(false,
+                    "That pack has no owner. A pack must record the character it was made for, or it " +
+                    "would apply to everyone.");
+            }
+
+            // Replacing by id is how updates work, but it must never consume a pack this user authors:
+            // their entries would be discarded, ownership reassigned, and PruneUnusedMedia would then
+            // delete their artwork.
+            var existing = store.Get(pack.Id);
+            if (existing is not null && existing.IsLocal)
+            {
+                return new PackTransferResult(false,
+                    $"That archive claims the same id as your own pack \"{existing.Name}\". Refusing to " +
+                    "overwrite a pack you authored.");
+            }
+
             if (pack.Entries.Count > StickerLimits.MaxEntriesPerPack)
             {
                 return new PackTransferResult(false,
@@ -211,17 +242,30 @@ public static class PackArchive
             pack.Enabled = true;
             pack.ArchiveHash = archiveHash;
 
-            var existing = store.Get(pack.Id);
-            if (existing is not null)
+            // Priority is never taken from the archive. It decides which pack wins when two bind the same
+            // phrase, so a hostile int.MinValue would outrank everything the recipient owns.
+            store.WithLock(() =>
             {
-                pack.Priority = existing.Priority;
+                // Re-read under the lock: the check above ran before the images were unpacked, and a
+                // pack could have been created in between.
+                var current = store.Get(pack.Id);
 
-                // Keep a URL the recipient already had if the archive does not carry one.
-                if (string.IsNullOrEmpty(pack.SourceUrl))
-                    pack.SourceUrl = existing.SourceUrl;
-            }
+                if (current is not null)
+                {
+                    pack.Priority = current.Priority;
 
-            store.Save(pack);
+                    // Keep a URL the recipient already had if the archive does not carry one.
+                    if (string.IsNullOrEmpty(pack.SourceUrl))
+                        pack.SourceUrl = current.SourceUrl;
+                }
+                else
+                {
+                    // New arrivals sort behind everything already installed.
+                    pack.Priority = store.NextPriority();
+                }
+
+                store.Save(pack);
+            });
 
             var note = rejected > 0 ? $", {rejected} rejected" : string.Empty;
             return new PackTransferResult(

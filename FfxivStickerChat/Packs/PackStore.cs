@@ -38,6 +38,17 @@ public sealed class PackStore
 
     private readonly Dictionary<string, StickerPack> packs = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// Guards <see cref="packs"/> and <see cref="ordered"/>.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="Resolve"/> runs on the game thread inside the bubble hook, while a URL import runs
+    /// <see cref="Save"/> from a background thread — so reads and writes genuinely overlap. Reentrant,
+    /// which matters because <see cref="CreateLocal"/> and <see cref="Resolve"/>'s self-heal path both
+    /// call <see cref="Save"/> while already inside.
+    /// </remarks>
+    private readonly object gate = new();
+
     /// <summary>Priority-ordered view, rebuilt only when the set of packs changes.</summary>
     private List<StickerPack>? ordered;
 
@@ -51,14 +62,54 @@ public sealed class PackStore
 
     public string PacksDirectory { get; }
 
-    /// <summary>All loaded packs, in resolution order.</summary>
-    public IReadOnlyList<StickerPack> Packs => ordered ??= BuildOrdered();
+    /// <summary>
+    /// All loaded packs, in resolution order.
+    /// </summary>
+    /// <remarks>
+    /// Returns a snapshot that is never mutated in place — a writer replaces the list rather than editing
+    /// it — so a caller may keep enumerating one safely after the store has moved on.
+    /// </remarks>
+    public IReadOnlyList<StickerPack> Packs
+    {
+        get
+        {
+            lock (gate)
+                return ordered ??= BuildOrdered();
+        }
+    }
 
     public static bool IsSupportedImage(string path) => StickerLimits.IsAllowedExtension(path);
 
+    /// <summary>
+    /// Whether a pack id is safe to use as a directory name.
+    /// </summary>
+    /// <remarks>
+    /// Ids are generated as <c>Guid.NewGuid().ToString("N")</c>, but an imported <c>pack.json</c> is
+    /// written by someone else and can say anything. That string becomes a path, so an id like
+    /// <c>..\..\..\evil</c> or <c>C:\Windows\Temp\evil</c> would escape the store entirely — the rooted
+    /// form especially, since <see cref="Path.Combine(string, string)"/> discards the base directory when
+    /// the second part is absolute. Requiring the exact 32-hex-digit form rejects every such shape by
+    /// construction rather than by blocklist.
+    /// </remarks>
+    public static bool IsValidPackId(string? packId)
+        => !string.IsNullOrEmpty(packId) && Guid.TryParseExact(packId, "N", out _);
+
     public void EnsureDirectories() => Directory.CreateDirectory(PacksDirectory);
 
-    public string GetPackDirectory(string packId) => Path.Combine(PacksDirectory, packId);
+    /// <summary>The folder a pack owns.</summary>
+    /// <exception cref="ArgumentException">The id is not a valid pack id.</exception>
+    /// <remarks>
+    /// Unreachable in practice: <see cref="LoadAll"/> and <see cref="PackArchive.Import"/> both refuse an
+    /// invalid id, so one never reaches the store. It throws rather than sanitising because a bad id here
+    /// means a validation gate was bypassed, and quietly rewriting the path would hide that.
+    /// </remarks>
+    public string GetPackDirectory(string packId)
+    {
+        if (!IsValidPackId(packId))
+            throw new ArgumentException($"\"{packId}\" is not a valid pack id.", nameof(packId));
+
+        return Path.Combine(PacksDirectory, packId);
+    }
 
     public string GetMediaDirectory(string packId) => Path.Combine(GetPackDirectory(packId), MediaFolder);
 
@@ -108,37 +159,54 @@ public sealed class PackStore
         EnsureDirectories();
         MigrateFlatLayout();
 
-        packs.Clear();
-        ordered = null;
-
-        foreach (var directory in Directory.EnumerateDirectories(PacksDirectory))
+        lock (gate)
         {
-            var manifest = Path.Combine(directory, ManifestName);
-            if (!File.Exists(manifest))
-                continue;
+            packs.Clear();
+            ordered = null;
 
-            try
+            foreach (var directory in Directory.EnumerateDirectories(PacksDirectory))
             {
-                var pack = JsonSerializer.Deserialize<StickerPack>(File.ReadAllText(manifest), JsonOptions);
-
-                if (pack is null || string.IsNullOrWhiteSpace(pack.Id))
-                {
-                    Services.Log.Warning($"Skipping unreadable pack manifest: {manifest}");
+                var manifest = Path.Combine(directory, ManifestName);
+                if (!File.Exists(manifest))
                     continue;
+
+                try
+                {
+                    var pack = JsonSerializer.Deserialize<StickerPack>(File.ReadAllText(manifest), JsonOptions);
+
+                    if (pack is null || string.IsNullOrWhiteSpace(pack.Id))
+                    {
+                        Services.Log.Warning($"Skipping unreadable pack manifest: {manifest}");
+                        continue;
+                    }
+
+                    // A pack planted by an older build with an unchecked id stays inert rather than being
+                    // loaded and then written back out to wherever its id points.
+                    if (!IsValidPackId(pack.Id))
+                    {
+                        Services.Log.Warning(
+                            $"Skipping pack with an invalid id \"{pack.Id}\" ({manifest}). " +
+                            "Delete that folder by hand if you did not put it there.");
+                        continue;
+                    }
+
+                    packs[pack.Id] = pack;
                 }
+                catch (Exception ex)
+                {
+                    Services.Log.Error(ex, $"Failed to load pack manifest {manifest}");
+                }
+            }
 
-                packs[pack.Id] = pack;
-            }
-            catch (Exception ex)
-            {
-                Services.Log.Error(ex, $"Failed to load pack manifest {manifest}");
-            }
+            Services.Log.Information($"Loaded {packs.Count} sticker pack(s).");
         }
-
-        Services.Log.Information($"Loaded {packs.Count} sticker pack(s).");
     }
 
-    public StickerPack? Get(string packId) => packs.GetValueOrDefault(packId);
+    public StickerPack? Get(string packId)
+    {
+        lock (gate)
+            return packs.GetValueOrDefault(packId);
+    }
 
     /// <summary>Packs authored on this client, in resolution order.</summary>
     public IEnumerable<StickerPack> LocalPacks => Packs.Where(p => p.IsLocal);
@@ -156,19 +224,40 @@ public sealed class PackStore
     /// <summary>Creates a new pack authored by this character.</summary>
     public StickerPack CreateLocal(string name)
     {
-        var pack = new StickerPack
+        StickerPack pack;
+
+        lock (gate)
         {
-            Name = string.IsNullOrWhiteSpace(name) ? "New pack" : name.Trim(),
-            IsLocal = true,
+            pack = new StickerPack
+            {
+                Name = string.IsNullOrWhiteSpace(name) ? "New pack" : name.Trim(),
+                IsLocal = true,
 
-            // Sits after everything that already exists, so creating a pack never silently takes over
-            // a phrase an older one already binds.
-            Priority = packs.Count == 0 ? 0 : packs.Values.Max(p => p.Priority) + 1,
-        };
+                // Sits after everything that already exists, so creating a pack never silently takes over
+                // a phrase an older one already binds.
+                Priority = NextPriority(),
+            };
 
-        StampOwner(pack);
-        Save(pack);
+            StampOwner(pack);
+            Save(pack);
+        }
+
         return pack;
+    }
+
+    /// <summary>A priority that sorts after every pack currently loaded.</summary>
+    /// <remarks>Caller holds <see cref="gate"/>.</remarks>
+    internal int NextPriority() => packs.Count == 0 ? 0 : packs.Values.Max(p => p.Priority) + 1;
+
+    /// <summary>Runs <paramref name="action"/> with the store held still.</summary>
+    /// <remarks>
+    /// Import needs to decide a priority and commit the pack as one step; doing it in two would let a
+    /// concurrent create hand out the same number.
+    /// </remarks>
+    internal void WithLock(Action action)
+    {
+        lock (gate)
+            action();
     }
 
     /// <summary>
@@ -197,47 +286,70 @@ public sealed class PackStore
 
     public void Save(StickerPack pack)
     {
-        packs[pack.Id] = pack;
-        ordered = null;
-
-        var directory = GetPackDirectory(pack.Id);
-
-        try
+        if (!IsValidPackId(pack.Id))
         {
-            Directory.CreateDirectory(directory);
-            File.WriteAllText(Path.Combine(directory, ManifestName), JsonSerializer.Serialize(pack, JsonOptions));
+            Services.Log.Error($"Refusing to save pack \"{pack.Name}\": invalid id \"{pack.Id}\".");
+            return;
         }
-        catch (Exception ex)
+
+        // Held across the file write too, so two saves of the same pack cannot interleave into a
+        // half-written manifest.
+        lock (gate)
         {
-            Services.Log.Error(ex, $"Failed to save pack {pack.Name}");
+            packs[pack.Id] = pack;
+            ordered = null;
+
+            var directory = GetPackDirectory(pack.Id);
+
+            try
+            {
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(Path.Combine(directory, ManifestName), JsonSerializer.Serialize(pack, JsonOptions));
+            }
+            catch (Exception ex)
+            {
+                Services.Log.Error(ex, $"Failed to save pack {pack.Name}");
+            }
         }
     }
 
     /// <summary>Removes a pack and everything it owns.</summary>
     public bool Delete(string packId)
     {
-        packs.Remove(packId);
-        ordered = null;
-
-        var directory = GetPackDirectory(packId);
-
-        try
+        if (!IsValidPackId(packId))
         {
-            if (Directory.Exists(directory))
-                Directory.Delete(directory, recursive: true);
-
-            return true;
-        }
-        catch (Exception ex)
-        {
-            Services.Log.Error(ex, $"Failed to delete pack {packId}");
+            Services.Log.Error($"Refusing to delete \"{packId}\": invalid pack id.");
             return false;
+        }
+
+        lock (gate)
+        {
+            packs.Remove(packId);
+            ordered = null;
+
+            var directory = GetPackDirectory(packId);
+
+            try
+            {
+                if (Directory.Exists(directory))
+                    Directory.Delete(directory, recursive: true);
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Services.Log.Error(ex, $"Failed to delete pack {packId}");
+                return false;
+            }
         }
     }
 
     /// <summary>Total bytes a pack occupies on disk.</summary>
     public long GetPackSize(string packId)
     {
+        if (!IsValidPackId(packId))
+            return 0;
+
         var directory = GetPackDirectory(packId);
         if (!Directory.Exists(directory))
             return 0;
@@ -387,7 +499,7 @@ public sealed class PackStore
             try
             {
                 var pack = JsonSerializer.Deserialize<StickerPack>(File.ReadAllText(manifest), JsonOptions);
-                if (pack is null || string.IsNullOrWhiteSpace(pack.Id))
+                if (pack is null || !IsValidPackId(pack.Id))
                     continue;
 
                 var mediaDirectory = GetMediaDirectory(pack.Id);
