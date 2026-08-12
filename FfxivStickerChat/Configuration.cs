@@ -37,7 +37,7 @@ public class Configuration : IPluginConfiguration
     /// </summary>
     public int Version { get; set; } = CurrentVersion;
 
-    public const int CurrentVersion = 5;
+    public const int CurrentVersion = 6;
 
     /// <summary>Applies migrations for configs written by an older build.</summary>
     public void Migrate()
@@ -75,6 +75,21 @@ public class Configuration : IPluginConfiguration
             Version = 5;
             Save();
             Services.Log.Information("Config migrated: channel filter is now a blocklist.");
+        }
+
+        if (Version < 6)
+        {
+            // Pack sync arrives off by default, and stays off for anyone upgrading. The new bool
+            // properties would deserialise to false anyway; the point of this block is to advance the
+            // version and to make sure the one-time explainer is shown before anything leaves the
+            // machine.
+            SyncShare = false;
+            SyncReceive = false;
+            SyncNoticeShown = false;
+
+            Version = 6;
+            Save();
+            Services.Log.Information("Config migrated: pack sync added, disabled by default.");
         }
     }
 
@@ -236,6 +251,59 @@ public class Configuration : IPluginConfiguration
 
     /// <summary>Log every bubble mutation. Noisy; for bring-up only.</summary>
     public bool VerboseLogging { get; set; }
+
+    // ---- Pack sync ------------------------------------------------------------------------------
+    //
+    // Off by default, both directions. Sharing publishes a pointer to your packs to the players you are
+    // already paired with in a sync client; receiving fetches theirs from the URL they advertise, which
+    // means contacting that host directly. Neither should start without being asked for.
+
+    /// <summary>Advertise this character's packs to sync pairs.</summary>
+    public bool SyncShare { get; set; }
+
+    /// <summary>Download packs advertised by sync pairs.</summary>
+    public bool SyncReceive { get; set; }
+
+    /// <summary>Whether the one-time explanation of what sync sends has been shown.</summary>
+    public bool SyncNoticeShown { get; set; }
+
+    /// <summary>
+    /// Opaque per-install token, if the sync client's extension API wants one to register with.
+    /// </summary>
+    /// <remarks>
+    /// Generated once and kept, rather than per session, so a pair sees a stable identity across logins.
+    /// Not derived from anything about the character or machine.
+    /// </remarks>
+    public string SyncToken { get; set; } = Guid.NewGuid().ToString("N");
+
+    /// <summary>Sync pairs whose packs are never fetched.</summary>
+    public List<string> SyncBlockedUids { get; set; } = [];
+
+    /// <summary>
+    /// Which pair a synced pack first arrived from, as <c>packId -> uid</c>.
+    /// </summary>
+    /// <remarks>
+    /// Pins a pack to its origin so a second pair cannot take it over by advertising the same id. Lives
+    /// here rather than on <see cref="Packs.StickerPack"/> deliberately: a field there would travel inside
+    /// the exported zip, which would make the value attacker-supplied and useless for this.
+    /// </remarks>
+    public Dictionary<string, string> SyncPackOrigin { get; set; } = [];
+
+    /// <summary>When each synced pack was last advertised by a visible pair, as unix seconds.</summary>
+    /// <remarks>Drives eviction once <see cref="SyncStorageBudgetMb"/> is reached.</remarks>
+    public Dictionary<string, long> SyncLastSeen { get; set; } = [];
+
+    /// <summary>
+    /// Disk budget for packs received over sync, in megabytes.
+    /// </summary>
+    /// <remarks>
+    /// A pack is up to about 60 MB, so a few dozen pairs would otherwise grow without bound. The default
+    /// holds roughly eight full-size packs.
+    /// </remarks>
+    public int SyncStorageBudgetMb { get; set; } = 512;
+
+    /// <summary>Whether a pair's packs may be fetched.</summary>
+    public bool IsSyncPairAllowed(string uid) => !SyncBlockedUids.Contains(uid);
 
     public void Save() => Services.PluginInterface.SavePluginConfig(this);
 }

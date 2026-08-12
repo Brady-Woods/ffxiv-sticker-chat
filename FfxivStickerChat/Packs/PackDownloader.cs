@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -35,6 +36,59 @@ public static class PackDownloader
 
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(60);
 
+    /// <summary>
+    /// Hosts a pack may be fetched from when the URL was not chosen by this user.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Only applies to pack sync. Typing a URL yourself is a decision; having a pack advertised to you and
+    /// fetched automatically is not, and without a list the player advertising it could point your client
+    /// at a host they control and learn your IP address whenever they chose.
+    /// </para>
+    /// <para>
+    /// Note these are not the hosts <see cref="ShareLinks"/> rewrites: a GitHub release URL is already
+    /// direct, so it never appears there and has to be named here explicitly.
+    /// </para>
+    /// </remarks>
+    private static readonly string[] AllowedSyncHosts =
+    [
+        "github.com",
+        "objects.githubusercontent.com",
+        "release-assets.githubusercontent.com",
+        "raw.githubusercontent.com",
+        "drive.google.com",
+        "docs.google.com",
+        "dropbox.com",
+        "dropboxusercontent.com",
+        "1drv.ms",
+        "onedrive.live.com",
+        "sharepoint.com",
+    ];
+
+    /// <summary>Whether a host may be fetched from on the sync path.</summary>
+    /// <remarks>
+    /// Matches a host exactly or as a subdomain, so <c>evil-github.com</c> does not pass as
+    /// <c>github.com</c> and <c>contoso.sharepoint.com</c> does pass as <c>sharepoint.com</c>.
+    /// </remarks>
+    public static bool IsAllowedSyncHost(Uri uri)
+    {
+        var host = uri.Host.ToLowerInvariant();
+
+        foreach (var allowed in AllowedSyncHosts)
+        {
+            if (host.Equals(allowed, StringComparison.Ordinal) ||
+                host.EndsWith("." + allowed, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>The hosts sync will fetch from, for showing in the UI.</summary>
+    public static IReadOnlyList<string> SyncHosts => AllowedSyncHosts;
+
     /// <summary>Downloads and imports a pack, returning the same result shape as a local import.</summary>
     /// <param name="expectedHash">
     /// SHA-256 of the archive, lowercase hex, or null to skip the check. Supplied by pack sync so a
@@ -44,7 +98,9 @@ public static class PackDownloader
         string url,
         PackStore store,
         string? expectedHash = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool restrictToSyncHosts = false,
+        Func<StickerPack, string?>? approve = null)
     {
         // A share link points at a web page, not a file. Rewrite it to the direct form before anything
         // else, so the URL people naturally copy actually works.
@@ -59,11 +115,19 @@ public static class PackDownloader
         if (!TryValidateUrl(resolved.Url, out var uri, out var reason))
             return new PackTransferResult(false, reason);
 
+        // Checked after the share-link rewrite, since that is what decides the host actually contacted.
+        if (restrictToSyncHosts && !IsAllowedSyncHost(uri))
+        {
+            return new PackTransferResult(false,
+                $"{uri.Host} is not a host pack sync will download from. Allowed: " +
+                string.Join(", ", AllowedSyncHosts) + ".");
+        }
+
         string? tempPath = null;
 
         try
         {
-            var bytes = await FetchAsync(uri, cancellationToken).ConfigureAwait(false);
+            var bytes = await FetchAsync(uri, restrictToSyncHosts, cancellationToken).ConfigureAwait(false);
 
             if (bytes.Length < 4 || bytes[0] != 'P' || bytes[1] != 'K' || bytes[2] != 0x03 || bytes[3] != 0x04)
             {
@@ -87,7 +151,7 @@ public static class PackDownloader
             tempPath = Path.Combine(Path.GetTempPath(), $"stickerpack_{Guid.NewGuid():N}.zip");
             await File.WriteAllBytesAsync(tempPath, bytes, cancellationToken).ConfigureAwait(false);
 
-            var result = PackArchive.Import(tempPath, store);
+            var result = PackArchive.Import(tempPath, store, approve);
 
             if (result.Success && result.Pack is not null)
             {
@@ -151,7 +215,10 @@ public static class PackDownloader
         return true;
     }
 
-    private static async Task<byte[]> FetchAsync(Uri uri, CancellationToken cancellationToken)
+    private static async Task<byte[]> FetchAsync(
+        Uri uri,
+        bool restrictToSyncHosts,
+        CancellationToken cancellationToken)
     {
         // Redirects are followed by hand so every hop gets the same scrutiny as the first. Letting
         // HttpClient follow them automatically would allow a public URL to bounce to a private address.
@@ -181,6 +248,11 @@ public static class PackDownloader
 
                 if (!current.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("Redirected to a non-https URL.");
+
+                // Re-checked every hop: an allowed host is free to redirect anywhere, and GitHub in
+                // particular hands release downloads off to a separate asset domain.
+                if (restrictToSyncHosts && !IsAllowedSyncHost(current))
+                    throw new InvalidOperationException($"Redirected to {current.Host}, which sync will not fetch from.");
 
                 continue;
             }

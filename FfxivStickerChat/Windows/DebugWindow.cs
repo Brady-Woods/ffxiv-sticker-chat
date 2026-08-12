@@ -22,12 +22,21 @@ public sealed unsafe class DebugWindow : Window, IDisposable
 {
     private static readonly string[] AddonNames = [MiniTalk.PlayerAddon, MiniTalk.NpcAddon];
 
+    private readonly Sync.PackSyncService packSync;
+
     private int selectedAddon;
     private string filter = "MiniTalk";
     private bool onlyVisible;
 
-    public DebugWindow() : base("Sticker Chat — Bubble Inspector###StickerChatDebug")
+    private string injectUid = "TEST-PAIR";
+    private string injectName = string.Empty;
+    private string injectPayload = string.Empty;
+    private string injectResult = string.Empty;
+
+    public DebugWindow(Sync.PackSyncService packSync) : base("Sticker Chat — Bubble Inspector###StickerChatDebug")
     {
+        this.packSync = packSync;
+
         SizeConstraints = new WindowSizeConstraints
         {
             MinimumSize = new Vector2(660, 440),
@@ -37,8 +46,85 @@ public sealed unsafe class DebugWindow : Window, IDisposable
 
     public void Dispose() { }
 
+    /// <summary>
+    /// Drives pack sync by hand, without a sync client or a second player.
+    /// </summary>
+    /// <remarks>
+    /// Feeding a payload here runs everything the real transport would: parsing, the eligibility rules,
+    /// the download, the ownership check and the import. Only the transport itself is skipped — so nearly
+    /// every way sync can be wrong is reachable from one machine, which is the whole reason the service
+    /// takes its input through a method rather than reading it from Snowcloak directly.
+    /// </remarks>
+    private void DrawSyncHarness()
+    {
+        if (!ImGui.CollapsingHeader("Pack sync harness"))
+            return;
+
+        ImGui.TextWrapped(
+            "Pretend a paired player is advertising something. \"Publish\" copies what this character " +
+            "would send, so you can paste it back in as if it came from someone else.");
+
+        ImGui.Spacing();
+        ImGui.TextUnformatted($"Publishing: {packSync.PublishStatus}");
+        ImGui.TextUnformatted($"Receiving:  {packSync.ReceiveStatus}");
+        ImGui.Spacing();
+
+        if (ImGui.Button("Copy what I would publish"))
+        {
+            var payload = packSync.BuildLocalPayload();
+            injectPayload = payload;
+            injectResult = payload.Length == 0
+                ? "Nothing to publish — see the status above for why."
+                : $"{System.Text.Encoding.UTF8.GetByteCount(payload)} bytes.";
+        }
+
+        ImGui.SetNextItemWidth(160);
+        ImGui.InputText("Pair uid", ref injectUid, 64);
+
+        ImGui.SameLine();
+        ImGui.SetNextItemWidth(200);
+        ImGui.InputTextWithHint("Their character", "Name of the character behind that uid", ref injectName, 64);
+
+        ImGui.InputTextMultiline("Payload", ref injectPayload, 8192, new Vector2(-1, 90));
+
+        if (ImGui.Button("Inject as remote"))
+        {
+            // Ownership cannot be checked without knowing who the uid is, so set it first if given.
+            if (!string.IsNullOrWhiteSpace(injectName))
+            {
+                packSync.SetPairIdentity(
+                    injectUid,
+                    injectName.Trim(),
+                    (ushort)Services.PlayerState.HomeWorld.RowId);
+            }
+
+            packSync.InjectRemoteData(injectUid, injectPayload);
+            injectResult = "Injected. Watch /xllog and the pack list.";
+        }
+
+        ImGui.SameLine();
+        if (ImGui.Button("Forget that pair"))
+        {
+            packSync.RemovePair(injectUid);
+            injectResult = "Pair forgotten.";
+        }
+
+        if (injectResult.Length > 0)
+            ImGui.TextWrapped(injectResult);
+
+        foreach (var (uid, pointer, blocker) in packSync.Offers())
+        {
+            ImGui.TextUnformatted(blocker.Length > 0
+                ? $"  {uid}: \"{pointer.Name}\" — not fetching: {blocker}"
+                : $"  {uid}: \"{pointer.Name}\" — eligible");
+        }
+    }
+
     public override void Draw()
     {
+        DrawSyncHarness();
+        ImGui.Separator();
+
         DrawAddonScan();
         ImGui.Separator();
 

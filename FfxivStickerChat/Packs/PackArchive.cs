@@ -114,7 +114,19 @@ public static class PackArchive
         }
     }
 
-    public static PackTransferResult Import(string archivePath, PackStore store)
+    /// <summary>
+    /// Reads a pack out of an archive and installs it.
+    /// </summary>
+    /// <param name="approve">
+    /// Optional last word on whether to accept the pack, given its parsed manifest. Return null to
+    /// accept, or a reason to refuse. Called after the manifest is validated but before a single byte is
+    /// written, so a refused pack never exists on disk — which is what makes it usable for rules that
+    /// depend on who the pack claims to belong to.
+    /// </param>
+    public static PackTransferResult Import(
+        string archivePath,
+        PackStore store,
+        Func<StickerPack, string?>? approve = null)
     {
         try
         {
@@ -175,6 +187,14 @@ public static class PackArchive
             {
                 return new PackTransferResult(false,
                     $"Pack declares {pack.Entries.Count} stickers; the limit is {StickerLimits.MaxEntriesPerPack}.");
+            }
+
+            // Last gate before anything is written.
+            if (approve is not null)
+            {
+                var refusal = approve(pack);
+                if (refusal is not null)
+                    return new PackTransferResult(false, refusal);
             }
 
             var total = 0L;

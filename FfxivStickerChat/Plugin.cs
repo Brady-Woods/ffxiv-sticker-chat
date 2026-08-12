@@ -7,6 +7,7 @@ using Dalamud.Interface.Windowing;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using FfxivStickerChat.Packs;
+using FfxivStickerChat.Sync;
 using FfxivStickerChat.Windows;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 
@@ -17,6 +18,7 @@ public sealed unsafe class Plugin : IDalamudPlugin
     private const string ConfigCommand = "/stickerchat";
 
     private readonly PackStore packStore;
+    private readonly PackSyncService packSync;
     private readonly StickerRegistry registry;
     private readonly BubbleHook bubbleHook;
     private readonly BubbleDecorator decorator;
@@ -25,6 +27,11 @@ public sealed unsafe class Plugin : IDalamudPlugin
     private readonly IAddonLifecycle.AddonEventDelegate onAddonPostDraw;
 
     private static readonly string[] BubbleAddons = [MiniTalk.PlayerAddon, MiniTalk.NpcAddon];
+
+    /// <summary>How often the sync queue is pumped, in milliseconds.</summary>
+    private const long SyncTickIntervalMs = 1000;
+
+    private long lastSyncTick;
 
     public Configuration Configuration { get; }
 
@@ -47,13 +54,15 @@ public sealed unsafe class Plugin : IDalamudPlugin
         packStore.LoadAll();
         Configuration.MigrateMappingsToPack(packStore);
 
+        packSync = new PackSyncService(Configuration, packStore);
+
         registry = new StickerRegistry(Configuration);
 
         bubbleHook = new BubbleHook(Configuration, packStore);
         decorator = new BubbleDecorator(Configuration, registry, bubbleHook);
 
         configWindow = new ConfigWindow(this, registry);
-        debugWindow = new DebugWindow();
+        debugWindow = new DebugWindow(packSync);
         WindowSystem.AddWindow(configWindow);
         WindowSystem.AddWindow(debugWindow);
 
@@ -80,6 +89,9 @@ public sealed unsafe class Plugin : IDalamudPlugin
 
     /// <summary>The pack store, for the config UI.</summary>
     public PackStore PackStore => packStore;
+
+    /// <summary>Pack sync, for the config UI.</summary>
+    public PackSyncService PackSync => packSync;
 
     /// <summary>
     /// Previews a binding by showing a real bubble on your own character.
@@ -112,6 +124,22 @@ public sealed unsafe class Plugin : IDalamudPlugin
         {
             // A throw here would fire every frame; log once-ish and keep the game usable.
             Services.Log.Error(ex, "Sticker Chat frame update failed");
+        }
+
+        // Sync work is second-scale, not frame-scale: it walks the pack list and hashes nothing, but
+        // there is no reason to do it 100 times a second.
+        if (Environment.TickCount64 - lastSyncTick < SyncTickIntervalMs)
+            return;
+
+        lastSyncTick = Environment.TickCount64;
+
+        try
+        {
+            packSync.Pump();
+        }
+        catch (Exception ex)
+        {
+            Services.Log.Error(ex, "Sticker Chat pack sync failed");
         }
     }
 
@@ -153,6 +181,9 @@ public sealed unsafe class Plugin : IDalamudPlugin
         WindowSystem.RemoveAllWindows();
         configWindow.Dispose();
         debugWindow.Dispose();
+
+        // Cancels any download in flight before the store it would write into goes away.
+        packSync.Dispose();
 
         // Order matters: stop new bubbles arriving, undo edits, then release textures.
         bubbleHook.Dispose();
