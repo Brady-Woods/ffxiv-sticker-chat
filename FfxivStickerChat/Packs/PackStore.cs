@@ -72,16 +72,28 @@ public sealed class PackStore
     /// Runs once per bubble, so it walks the cached ordering rather than re-sorting, and touches no
     /// image data — only the manifests already in memory.
     /// </remarks>
-    public string? Resolve(uint group, uint key, string sender, ushort worldId)
+    public string? Resolve(uint group, uint key, string phrase, string sender, ushort worldId)
     {
         foreach (var pack in Packs)
         {
             if (!pack.Enabled || !pack.AppliesToSender(sender, worldId))
                 continue;
 
-            var entry = pack.Find(group, key);
+            var entry = pack.Find(group, key, phrase);
             if (entry is null)
                 continue;
+
+            // Self-heal: a binding made from the dropdown carries the sheet's key, which the game does
+            // not use. Adopt the observed values so it matches on id from now on.
+            if (entry.Group != group || entry.Key != key)
+            {
+                Services.Log.Information(
+                    $"Corrected binding \"{entry.Phrase}\": ({entry.Group},{entry.Key}) -> ({group},{key})");
+
+                entry.Group = group;
+                entry.Key = key;
+                Save(pack);
+            }
 
             var path = ResolveMedia(pack, entry);
             if (path is not null)

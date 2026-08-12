@@ -91,12 +91,42 @@ public sealed class StickerPack
     /// </remarks>
     public bool IsBuiltIn { get; set; }
 
-    /// <summary>Finds an enabled entry for a phrase id.</summary>
-    public PackEntry? Find(uint group, uint key)
+    /// <summary>
+    /// Finds an enabled entry for a phrase, by id and then by rendered text.
+    /// </summary>
+    /// <remarks>
+    /// The id is authoritative, but the <c>Completion</c> sheet's Key column does not always carry the
+    /// value the payload reports — a phrase stored from the dropdown as key 3 arrives from the game as
+    /// key 203 — so a binding created that way could never match on id alone.
+    /// <para>
+    /// Falling back to the phrase text is safe here because the caller has already established that the
+    /// message is auto-translate only. Typing the same words by hand still does nothing, since such a
+    /// message never reaches this point.
+    /// </para>
+    /// </remarks>
+    public PackEntry? Find(uint group, uint key, string phrase)
     {
         foreach (var entry in Entries)
         {
             if (entry.Enabled && entry.Group == group && entry.Key == key)
+                return entry;
+        }
+
+        if (string.IsNullOrEmpty(phrase))
+            return null;
+
+        // Normalise both sides: a stored phrase may carry the auto-translate bracket glyphs, or differ
+        // in trailing punctuation and spacing from what the bubble renders.
+        var wanted = AutoTranslateDetector.Normalize(phrase).TrimEnd('.', '!', '?', ' ');
+
+        foreach (var entry in Entries)
+        {
+            if (!entry.Enabled || string.IsNullOrEmpty(entry.Phrase))
+                continue;
+
+            var candidate = AutoTranslateDetector.Normalize(entry.Phrase).TrimEnd('.', '!', '?', ' ');
+
+            if (candidate.Length > 0 && string.Equals(candidate, wanted, StringComparison.OrdinalIgnoreCase))
                 return entry;
         }
 

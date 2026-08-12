@@ -235,11 +235,11 @@ public sealed unsafe class BubbleHook : IDisposable
                 // Match on the auto-translate id, not the rendered words: the pair is language
                 // independent and cannot be reproduced by typing. Packs are consulted in priority order
                 // and may be scoped to a specific sender, which is how an imported pack follows its owner.
-                if (channelAllowed)
-                    imagePath = packs.Resolve(first.Group, first.Key, senderName, worldId);
-
                 // How the bubble will render this message, so the right bubble can be identified later.
                 matchText = AutoTranslateDetector.Normalize(parsed.TextValue);
+
+                if (channelAllowed)
+                    imagePath = packs.Resolve(first.Group, first.Key, matchText, senderName, worldId);
 
                 RecordSeen(first.Group, first.Key, first.Text, senderName);
 
