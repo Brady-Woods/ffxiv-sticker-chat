@@ -19,6 +19,7 @@ public sealed unsafe class Plugin : IDalamudPlugin
 
     private readonly PackStore packStore;
     private readonly PackSyncService packSync;
+    private readonly SnowcloakBridge snowcloak;
     private readonly StickerRegistry registry;
     private readonly BubbleHook bubbleHook;
     private readonly BubbleDecorator decorator;
@@ -55,6 +56,7 @@ public sealed unsafe class Plugin : IDalamudPlugin
         Configuration.MigrateMappingsToPack(packStore);
 
         packSync = new PackSyncService(Configuration, packStore);
+        snowcloak = new SnowcloakBridge(packSync);
 
         registry = new StickerRegistry(Configuration);
 
@@ -92,6 +94,9 @@ public sealed unsafe class Plugin : IDalamudPlugin
 
     /// <summary>Pack sync, for the config UI.</summary>
     public PackSyncService PackSync => packSync;
+
+    /// <summary>The Snowcloak transport, for the config UI.</summary>
+    public SnowcloakBridge Snowcloak => snowcloak;
 
     /// <summary>
     /// Previews a binding by showing a real bubble on your own character.
@@ -135,6 +140,7 @@ public sealed unsafe class Plugin : IDalamudPlugin
 
         try
         {
+            snowcloak.Tick();
             packSync.Pump();
         }
         catch (Exception ex)
@@ -182,7 +188,9 @@ public sealed unsafe class Plugin : IDalamudPlugin
         configWindow.Dispose();
         debugWindow.Dispose();
 
-        // Cancels any download in flight before the store it would write into goes away.
+        // Stop new payloads arriving before the service they feed goes away, then cancel any download
+        // in flight before the store it would write into does.
+        snowcloak.Dispose();
         packSync.Dispose();
 
         // Order matters: stop new bubbles arriving, undo edits, then release textures.

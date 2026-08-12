@@ -16,6 +16,16 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!--
+      Typed client for Snowcloak's extension API, which is what carries sticker pack pointers between
+      players. No transitive dependencies, and referenced from exactly one file — Sync/SnowcloakBridge.cs.
+      Snowcloak is the only sync client this can work with: the other Mare forks expose no way for a
+      third-party plugin's data to travel with a character.
+    -->
+    <PackageReference Include="Snowcloak.Ipc" Version="1.4.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Content Include="..\Data\stickers\**\*.png">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>stickers\%(RecursiveDir)%(Filename)%(Extension)</Link>

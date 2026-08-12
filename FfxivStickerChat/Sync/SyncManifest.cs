@@ -37,7 +37,15 @@ public sealed record SyncPointer(string Id, string Name, string Hash, string Url
 /// </remarks>
 public static class SyncManifest
 {
-    /// <summary>Bytes the extension channel allows one plugin.</summary>
+    /// <summary>
+    /// Bytes assumed available before the transport says otherwise.
+    /// </summary>
+    /// <remarks>
+    /// Snowcloak reports its real figure in <c>ExtensionGrant.MaxBytesPerPlugin</c> at registration, and
+    /// that is what <see cref="Build"/> is given. This constant is the fallback used before a grant
+    /// exists, and the bound <see cref="Parse"/> applies to somebody else's payload — where no grant of
+    /// ours applies.
+    /// </remarks>
     public const int MaxPayloadBytes = 4096;
 
     /// <summary>Most packs one player may advertise at once.</summary>
@@ -101,8 +109,13 @@ public static class SyncManifest
     /// https — are skipped rather than advertised, since a pointer nobody can act on only wastes budget
     /// and produces a failure on the far side.
     /// </remarks>
+    /// <param name="maxBytes">
+    /// Budget the transport allows, from <c>ExtensionGrant.MaxBytesPerPlugin</c>. The caps above keep the
+    /// worst case well under the documented 4096, but the figure is negotiated rather than fixed, so a
+    /// smaller one has to be honoured rather than assumed away.
+    /// </param>
     /// <returns>The JSON payload, or an empty string when there is nothing worth advertising.</returns>
-    public static string Build(IEnumerable<StickerPack> packs)
+    public static string Build(IEnumerable<StickerPack> packs, int maxBytes = MaxPayloadBytes)
     {
         var pointers = new List<WirePointer>();
 
@@ -128,14 +141,13 @@ public static class SyncManifest
 
         var json = JsonSerializer.Serialize(new Wire { V = SchemaVersion, P = pointers }, JsonOptions);
 
-        // Should be unreachable: the field caps bound the worst case below the limit. If it ever fires,
-        // a cap was raised without re-checking the arithmetic, and dropping pointers beats being silently
-        // rejected by the transport.
-        while (Encoding.UTF8.GetByteCount(json) > MaxPayloadBytes && pointers.Count > 0)
+        // Unreachable at the documented 4096, where the field caps bound the worst case to 3581. It exists
+        // because the budget is whatever the transport grants, which may be smaller than documented.
+        while (Encoding.UTF8.GetByteCount(json) > maxBytes && pointers.Count > 0)
         {
             Services.Log.Warning(
-                $"Sync payload is {Encoding.UTF8.GetByteCount(json)} bytes with {pointers.Count} pack(s); " +
-                "dropping the last one. The size caps need revisiting.");
+                $"Sync payload is {Encoding.UTF8.GetByteCount(json)} bytes with {pointers.Count} pack(s), " +
+                $"over the {maxBytes} byte budget; dropping the last one.");
 
             pointers.RemoveAt(pointers.Count - 1);
 

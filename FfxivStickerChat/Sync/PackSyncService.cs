@@ -183,8 +183,17 @@ public sealed class PackSyncService : IDisposable
         if (!configuration.SyncShare)
             return string.Empty;
 
-        return SyncManifest.Build(store.LocalPacks.Where(p => p.Enabled));
+        return SyncManifest.Build(store.LocalPacks.Where(p => p.Enabled), PayloadBudgetBytes);
     }
+
+    /// <summary>
+    /// Bytes the transport currently allows for one payload.
+    /// </summary>
+    /// <remarks>
+    /// Set from the grant at registration rather than assumed, since the limit is negotiated. Defaults to
+    /// the documented figure so the service works standalone.
+    /// </remarks>
+    public int PayloadBudgetBytes { get; set; } = SyncManifest.MaxPayloadBytes;
 
     /// <summary>
     /// The payload if it differs from what was last published, else null.

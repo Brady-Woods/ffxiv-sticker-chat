@@ -16,6 +16,16 @@ public sealed class Services
     [PluginService] public static IGameGui GameGui { get; private set; } = null!;
     [PluginService] public static IAddonLifecycle AddonLifecycle { get; private set; } = null!;
     [PluginService] public static IClientState ClientState { get; private set; } = null!;
+
+    /// <summary>
+    /// Needed to turn a sync pair's object index into a character name and world.
+    /// </summary>
+    /// <remarks>
+    /// Snowcloak identifies a pair by an opaque uid and a user-chosen alias, neither of which says who
+    /// they are in game. The object index does, and that is what a pack's stamped owner is checked
+    /// against before it will install.
+    /// </remarks>
+    [PluginService] public static IObjectTable ObjectTable { get; private set; } = null!;
     [PluginService] public static IPlayerState PlayerState { get; private set; } = null!;
     [PluginService] public static IDataManager DataManager { get; private set; } = null!;
     [PluginService] public static IGameConfig GameConfig { get; private set; } = null!;
