@@ -31,6 +31,9 @@ public sealed unsafe class BubbleDecorator : IDisposable
     /// </summary>
     private const byte NeutralMultiply = 100;
 
+    /// <summary>Image node wrap mode that maps the part onto the node's rect. None=0, Tile=1, Stretch=2.</summary>
+    private const byte WrapModeStretch = 2;
+
     /// <summary>How long a detected phrase stays eligible to claim a bubble.</summary>
     private static readonly TimeSpan PendingLifetime = TimeSpan.FromSeconds(15);
 
@@ -411,9 +414,10 @@ public sealed unsafe class BubbleDecorator : IDisposable
             }
         }
 
-        // Clamp sampling at the edges. Without it, non-integer scales let bilinear filtering read past
-        // the image, which shows as a corrupt band at some sizes and not others.
-        node->WrapMode = 1;
+        // Stretch the part to fill the node's rect. The values are None=0, Tile=1, Stretch=2 — this was
+        // previously set to 1 on the assumption that it meant clamp, which instead tiled the texture and
+        // drew a repeat of the sticker beside the bubble whenever the rect exceeded the part.
+        node->WrapMode = WrapModeStretch;
 
         var longestEdge = Math.Max(parts.SourceWidth, parts.SourceHeight);
         if (longestEdge == 0)
