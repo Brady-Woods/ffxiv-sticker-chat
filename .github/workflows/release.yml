@@ -66,11 +66,19 @@ jobs:
           $repo = Get-Content $path -Raw | ConvertFrom-Json
 
           # ConvertFrom-Json unwraps a single-element array, so normalise before writing back out.
+          # /releases/latest/ resolves to the newest NON-prerelease, so an alpha-only project has no
+          # "latest" and that URL 404s. Point at this tag explicitly instead.
+          $tag = "${{ github.ref_name }}"
+          $asset = "https://github.com/${{ github.repository }}/releases/download/$tag/latest.zip"
+
           $entries = @($repo)
           foreach ($entry in $entries) {
             $entry.AssemblyVersion = $version
             $entry.TestingAssemblyVersion = $version
             $entry.LastUpdate = [int][double]::Parse((Get-Date -UFormat %s))
+            $entry.DownloadLinkInstall = $asset
+            $entry.DownloadLinkUpdate = $asset
+            $entry.DownloadLinkTesting = $asset
           }
 
           ConvertTo-Json -InputObject $entries -Depth 10 | Set-Content $path -Encoding UTF8
