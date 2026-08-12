@@ -226,7 +226,7 @@ public sealed class PackTab
     /// <summary>
     /// Downloads a pack off the UI thread and reports the outcome back through the status line.
     /// </summary>
-    private void BeginUrlImport()
+    private void BeginUrlImport(string? expectedHash = null)
     {
         var url = importUrl.Trim();
         downloading = true;
@@ -234,7 +234,9 @@ public sealed class PackTab
 
         _ = Task.Run(async () =>
         {
-            var result = await PackDownloader.DownloadAndImportAsync(url, store).ConfigureAwait(false);
+            var result = await PackDownloader
+                .DownloadAndImportAsync(url, store, expectedHash)
+                .ConfigureAwait(false);
 
             // Touching store state and UI fields belongs on the framework thread.
             await Services.Framework.Run(() =>
@@ -314,6 +316,22 @@ public sealed class PackTab
                     "Travels with the pack when exported, so whoever imports it can pull your updates\n" +
                     "without you sending the file again.");
             }
+
+            if (!string.IsNullOrEmpty(pack.ArchiveHash))
+            {
+                ImGui.TextDisabled($"archive hash: {pack.ArchiveHash}");
+
+                ImGui.SameLine();
+                if (ImGui.SmallButton("Copy"))
+                    ImGui.SetClipboardText(pack.ArchiveHash);
+
+                if (ImGui.IsItemHovered())
+                {
+                    ImGui.SetTooltip(
+                        "Hash of the zip produced by the last export. Publish it alongside the URL so\n" +
+                        "recipients can verify the download and tell a stale copy from a current one.");
+                }
+            }
         }
         else if (!string.IsNullOrEmpty(pack.SourceUrl))
         {
@@ -325,6 +343,10 @@ public sealed class PackTab
                 if (ImGui.Button(downloading ? "Updating..." : "Update from source"))
                 {
                     importUrl = pack.SourceUrl;
+
+                    // No expected hash here: an update is by definition a different archive than the one
+                    // held, so verifying against the current hash would reject every real update. Sync
+                    // will supply the author's advertised hash for this.
                     BeginUrlImport();
                 }
             }

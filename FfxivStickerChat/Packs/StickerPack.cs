@@ -82,6 +82,20 @@ public sealed class StickerPack
     /// </remarks>
     public string SourceUrl { get; set; } = string.Empty;
 
+    /// <summary>
+    /// SHA-256 of this pack's zip, lowercase hex.
+    /// </summary>
+    /// <remarks>
+    /// Set on export to describe the file produced, and on import to describe the file received. That
+    /// makes it two useful things at once: what a recipient verifies a download against, and how either
+    /// side can tell whether the copy they hold matches the one being advertised.
+    /// <para>
+    /// Deliberately not written into the exported manifest — a file cannot contain its own hash — so the
+    /// value is published alongside the URL rather than inside the archive.
+    /// </para>
+    /// </remarks>
+    public string ArchiveHash { get; set; } = string.Empty;
+
     /// <summary>False hides the pack from resolution without deleting it.</summary>
     public bool Enabled { get; set; } = true;
 

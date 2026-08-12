@@ -56,9 +56,6 @@ public static class PackArchive
             if (!string.IsNullOrEmpty(directory))
                 Directory.CreateDirectory(directory);
 
-            using var stream = File.Create(destinationPath);
-            using var archive = new ZipArchive(stream, ZipArchiveMode.Create);
-
             // Export a copy so bumping the version does not mutate the live pack.
             var exported = Clone(pack);
             exported.Version = pack.Version + 1;
@@ -67,37 +64,48 @@ public static class PackArchive
             // IsLocal does not, since the recipient does not author it.
             exported.IsLocal = false;
 
+            // A file cannot contain its own hash. It is computed from the finished archive below and
+            // kept on the author's pack, to be published next to the URL.
+            exported.ArchiveHash = string.Empty;
+
             var written = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var missing = 0;
 
-            foreach (var entry in exported.Entries)
+            // Scoped so the archive is flushed and closed before it is hashed.
+            using (var stream = File.Create(destinationPath))
+            using (var archive = new ZipArchive(stream, ZipArchiveMode.Create))
             {
-                var source = store.ResolveMedia(pack, entry);
-                if (source is null)
+                foreach (var entry in exported.Entries)
                 {
-                    missing++;
-                    continue;
+                    var source = store.ResolveMedia(pack, entry);
+                    if (source is null)
+                    {
+                        missing++;
+                        continue;
+                    }
+
+                    var name = "media/" + entry.Media + entry.Extension;
+                    if (!written.Add(name))
+                        continue;
+
+                    archive.CreateEntryFromFile(source, name, CompressionLevel.Optimal);
                 }
 
-                var name = "media/" + entry.Media + entry.Extension;
-                if (!written.Add(name))
-                    continue;
-
-                archive.CreateEntryFromFile(source, name, CompressionLevel.Optimal);
-            }
-
-            var manifest = archive.CreateEntry("pack.json", CompressionLevel.Optimal);
-            using (var manifestStream = manifest.Open())
-            using (var writer = new StreamWriter(manifestStream))
-            {
+                var manifest = archive.CreateEntry("pack.json", CompressionLevel.Optimal);
+                using var manifestStream = manifest.Open();
+                using var writer = new StreamWriter(manifestStream);
                 writer.Write(JsonSerializer.Serialize(exported, JsonOptions));
             }
 
             pack.Version = exported.Version;
+            pack.ArchiveHash = HashFile(destinationPath);
             store.Save(pack);
 
             var note = missing > 0 ? $" ({missing} entries had missing images and were skipped)" : string.Empty;
-            return new PackTransferResult(true, $"Exported {written.Count} image(s){note}.", exported);
+            return new PackTransferResult(
+                true,
+                $"Exported {written.Count} image(s){note}. Archive hash {pack.ArchiveHash[..12]}...",
+                exported);
         }
         catch (Exception ex)
         {
@@ -110,6 +118,9 @@ public static class PackArchive
     {
         try
         {
+            // Recorded so the copy held here can later be compared against whatever is advertised.
+            var archiveHash = HashFile(archivePath);
+
             using var archive = ZipFile.OpenRead(archivePath);
 
             if (archive.Entries.Count > MaxEntries)
@@ -198,6 +209,7 @@ public static class PackArchive
             // stamped owner is taken as authoritative rather than being reassignable here.
             pack.IsLocal = false;
             pack.Enabled = true;
+            pack.ArchiveHash = archiveHash;
 
             var existing = store.Get(pack.Id);
             if (existing is not null)
@@ -252,6 +264,13 @@ public static class PackArchive
         return PackStore.IsSupportedImage(name);
     }
 
+    /// <summary>SHA-256 of a file, lowercase hex.</summary>
+    private static string HashFile(string path)
+    {
+        using var stream = File.OpenRead(path);
+        return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+    }
+
     private static StickerPack Clone(StickerPack pack) => new()
     {
         Id = pack.Id,
@@ -262,6 +281,7 @@ public static class PackArchive
         Enabled = pack.Enabled,
         Priority = pack.Priority,
         SourceUrl = pack.SourceUrl,
+        ArchiveHash = pack.ArchiveHash,
         IsLocal = pack.IsLocal,
         OwnerName = pack.OwnerName,
         OwnerWorldId = pack.OwnerWorldId,
