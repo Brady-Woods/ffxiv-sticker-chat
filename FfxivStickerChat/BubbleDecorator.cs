@@ -488,20 +488,10 @@ public sealed unsafe class BubbleDecorator : IDisposable
                 frame->SetPositionFloat(frame->X + deltaX, frame->Y + deltaY);
             }
 
-            // Move the tail by the same delta so it stays joined to the frame instead of being left
-            // behind as a detached fragment.
-            foreach (var candidate in nodes.Images)
-            {
-                if (candidate == (nint)node)
-                    continue;
-
-                var decoration = (AtkResNode*)candidate;
-
-                if (state is not null && !state.Resized.Exists(r => r.Node == candidate))
-                    state.Resized.Add((candidate, decoration->X, decoration->Y, decoration->Width, decoration->Height));
-
-                decoration->SetPositionFloat(decoration->X + deltaX, decoration->Y + deltaY);
-            }
+            // The tail is deliberately left alone. The game repositions it every frame so it points at
+            // whoever is speaking, and since this runs after the game's layout, shifting it by the
+            // frame's delta overrides that and aims it at the wrong place. The frame's bottom edge is
+            // pinned, so the tail still meets it without being touched.
 
             targetX = newRefX;
             targetY = newRefY;
